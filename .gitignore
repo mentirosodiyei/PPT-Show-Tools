@@ -1,0 +1,7 @@
+# Compiled apps are published as GitHub Releases, not committed.
+dist/
+.build/
+windows/target/
+.DS_Store
+__pycache__/
+*.pyc
