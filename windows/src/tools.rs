@@ -1,6 +1,6 @@
 //! PDF → PowerPoint, conservative 16:9 and notes extraction.
 use crate::merge::{describe_size, require_valid_slide_size};
-use crate::package::{checksum, copy_new, extension, extract, read_file, with_suffix, write_new, zip_dir, TempDir};
+use crate::package::{checksum, copy_new, extension, extract, read_file, zip_dir, TempDir};
 use crate::verifier::{ordered_parts, resolve_part, verify, PackageSnapshot};
 use crate::xml::{read_xml, A_NS, P_NS, PKG_NS, R_NS};
 use crate::{fail, scaler, textfit, Result};
@@ -31,7 +31,7 @@ fn strings(v: &[&str]) -> Vec<String> {
 }
 
 pub fn require_new(input: &Path, output: &Path) -> Result<()> {
-    if crate::package::same_file(input, output) || output.exists() || with_suffix(output, ".report.json").exists() || with_suffix(output, ".report.log").exists() {
+    if crate::package::same_file(input, output) || output.exists() || crate::reports::collides(output, &[".report.json", ".report.log"]) {
         return fail("The output or its report already exists. Choose a new name; the original is not modified.");
     }
     Ok(())
@@ -49,10 +49,10 @@ fn unpack(input: &Path, root: &Path) -> Result<()> {
 
 fn emit(report: &ToolReport) -> Result<()> {
     let output = PathBuf::from(&report.output);
-    write_new(&with_suffix(&output, ".report.json"), &crate::to_json(report)?)?;
+    crate::reports::write(&output, ".report.json", &crate::to_json(report)?)?;
     let warnings: Vec<String> = report.pages.iter().flat_map(|p| p.warnings.iter().map(move |w| format!("Slide {}: {w}", p.source_page))).collect();
     if !warnings.is_empty() {
-        write_new(&with_suffix(&output, ".report.log"), warnings.join("\r\n").as_bytes())?;
+        crate::reports::write(&output, ".report.log", warnings.join("\r\n").as_bytes())?;
     }
     Ok(())
 }
@@ -63,25 +63,10 @@ fn publish(staged: &Path, report: &ToolReport) -> Result<()> {
     copy_new(staged, &output)?;
     if let Err(e) = emit(report) {
         let _ = std::fs::remove_file(&output);
-        let _ = std::fs::remove_file(with_suffix(&output, ".report.json"));
+        crate::reports::remove(&output, &[".report.json", ".report.log"]);
         return Err(e);
     }
     Ok(())
-}
-
-/// The error log goes to the folder the user chose for the output, never next
-/// to the original, and never replaces an existing file.
-pub fn log_failure(output: &Path, error: &str) -> String {
-    let name = format!("Deckwright-ERROR-{}.log", uuid::Uuid::new_v4());
-    let log = output.parent().unwrap_or(Path::new(".")).join(&name);
-    match write_new(&log, error.as_bytes()) {
-        Ok(()) => log.display().to_string(),
-        Err(_) => {
-            let fallback = std::env::temp_dir().join(&name);
-            let _ = write_new(&fallback, error.as_bytes());
-            format!("Could not write next to the output. Log written to: {}", fallback.display())
-        }
-    }
 }
 
 /// With a fixed size (Settings) the slides take it and every page is fitted

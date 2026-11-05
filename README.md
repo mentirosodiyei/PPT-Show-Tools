@@ -29,11 +29,21 @@ When a merge combines presentations of different sizes, each one is adapted to t
 - Picture backgrounds fill the new slide and overflow on the sides that no longer fit, without stretching.
 - Animations, motion paths and transitions are unchanged (PowerPoint measures them as fractions of the slide).
 
-Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\Deckwright\settings.json`.
+Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\Deckwright\settings.json` (the portable version keeps it only while it is open).
 
 ## Checks and reports
 
-Each output gets a `.report.json` (and a `.report.txt` for merges): slide order and count, text, animation and timing trees, transitions, notes, SHA-256 of media/fonts/embedded objects, content types, unique IDs and internal relationships. Packages are treated as untrusted input: ZIP paths, symbolic links, duplicate entries and oversized archives are refused.
+Nothing is written next to the files you convert. Reports and error logs go to a logs folder and are deleted after 30 days:
+
+| Version | Reports and logs |
+|---|---|
+| macOS | `~/Library/Logs/Deckwright` |
+| Windows, installed | `%LOCALAPPDATA%\Deckwright\Logs` (removed by the uninstaller) |
+| Windows, portable zip | None: it writes no reports, logs or settings file |
+
+**Open report** in the app opens the report of the last conversion. Each report holds slide order and count, text, animation and timing trees, transitions, notes, SHA-256 of media/fonts/embedded objects, content types, unique IDs and internal relationships. Packages are treated as untrusted input: ZIP paths, symbolic links, duplicate entries and oversized archives are refused.
+
+For scripts, `DECKWRIGHT_REPORTS_NEXT_TO_OUTPUT=1` writes `<output>.report.json` beside the output instead, and `DECKWRIGHT_LOG_DIR` changes the logs folder.
 
 The checks are structural. They do not certify visual fidelity, playback, fonts or SmartArt/OLE rendering; review the result in PowerPoint.
 
@@ -72,7 +82,7 @@ Deckwright --extract-notes output.pptx input.pptx
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports
 ```
 
 `DECKWRIGHT_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.

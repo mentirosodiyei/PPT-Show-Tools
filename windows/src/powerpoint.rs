@@ -1,7 +1,7 @@
 //! Open XML merge re-saved by Microsoft PowerPoint through COM automation
 //! (PowerShell), with no keyboard, mouse, clipboard or window focus.
 use crate::merge::MergeReport;
-use crate::package::{extension, with_suffix, write_new, TempDir};
+use crate::package::{extension, TempDir};
 use crate::verifier::FileValidation;
 use crate::{fail, Result};
 use serde::{Deserialize, Serialize};
@@ -138,13 +138,13 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
     if extension(output) != "pptx" {
         return fail("Saving with PowerPoint produces PPTX. To keep macros, use Merge with a PPTM output.");
     }
-    if output.exists() || with_suffix(output, ".report.json").exists() || with_suffix(output, ".report.txt").exists() {
+    if output.exists() || crate::reports::collides(output, &[".report.json", ".report.txt"]) {
         return fail("The output file or its report already exists. Choose another name.");
     }
     let temp = TempDir::new("Deckwright-PowerPoint")?;
     let intermediate = temp.path().join("open-xml-merge.pptx");
     progress("Merging and checking…".into());
-    let open_xml = crate::merge::merge(inputs, &intermediate, fixed)?;
+    let open_xml = crate::merge::merge_with(inputs, &intermediate, fixed, false)?;
     if !open_xml.structural_validation_passed() {
         let issues: Vec<String> = open_xml.validation.iter().flat_map(|v| v.issues.iter().take(5).map(move |i| format!("{}: {i}", v.file))).collect();
         return fail(format!("The Open XML merge failed its checks; it is not sent to PowerPoint.\n{}", issues.join("\n")));
@@ -192,7 +192,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
         warnings,
     };
     let written = (|| -> Result<()> {
-        write_new(&with_suffix(output, ".report.json"), &crate::to_json(&report)?)?;
+        crate::reports::write(output, ".report.json", &crate::to_json(&report)?)?;
         let mut lines = vec!["DECKWRIGHT — OPEN XML MERGE SAVED WITH POWERPOINT".to_string(), if report.passed() { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new()];
         for (i, check) in report.validation().iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
@@ -203,10 +203,10 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
         }
         lines.push("WARNINGS".into());
         lines.extend(report.warnings.iter().cloned());
-        write_new(&with_suffix(output, ".report.txt"), lines.join("\r\n").as_bytes())
+        crate::reports::write(output, ".report.txt", lines.join("\r\n").as_bytes())
     })();
     if let Err(e) = written {
-        let _ = std::fs::remove_file(with_suffix(output, ".report.json"));
+        crate::reports::remove(output, &[".report.json", ".report.txt"]);
         return Err(e);
     }
     Ok(report)

@@ -219,11 +219,12 @@ func insertInPresentationOrder(_ root: XMLElement, _ node: XMLElement) {
 }
 
 struct OpenXMLMerger {
-    func merge(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil) throws -> MergeReport {
+    /// writeReports false: the caller (PowerPoint save) writes its own report.
+    func merge(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, writeReports: Bool = true) throws -> MergeReport {
         let fm = FileManager.default
         guard inputs.count >= 2 else { try fail("Add at least two presentations.") }
         guard ["pptx", "pptm"].contains(output.pathExtension.lowercased()) else { try fail("The output must be PPTX or PPTM.") }
-        guard !fm.fileExists(atPath: output.path), !fm.fileExists(atPath: output.path + ".report.json"), !fm.fileExists(atPath: output.path + ".report.txt") else { try fail("The output file or its report already exists. Choose another name.") }
+        guard !fm.fileExists(atPath: output.path), !(writeReports && ReportStore.collides(output, [".report.json", ".report.txt"])) else { try fail("The output file or its report already exists. Choose another name.") }
         for input in inputs {
             guard ["pptx", "pptm"].contains(input.pathExtension.lowercased()), input.standardizedFileURL != output.standardizedFileURL else { try fail("Invalid input.") }
         }
@@ -438,9 +439,10 @@ struct OpenXMLMerger {
         let validation = try PackageVerifier.verify(sources: originals, inputs: inputs, merged: verificationRoot)
         let report = MergeReport(engine: "Deckwright-OpenXML-v0.8.0", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
         try fm.copyItem(at: archive, to: output)
+        guard writeReports else { return report }
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(report).write(to: URL(fileURLWithPath: output.path + ".report.json"), options: .withoutOverwriting)
+            try ReportStore.write(try encoder.encode(report), for: output, ".report.json")
             var lines = ["DECKWRIGHT — CHECKS PER FILE", report.structuralValidationPassed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", "", "Output size: \(describeSize(target))", ""]
             for (i, check) in validation.enumerated() {
                 lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT", "\(check.checkedSlides) slides; \(check.slidesWithAnimation) with animation; \(check.binaryResourcesChecked) resources checked."]
@@ -450,10 +452,10 @@ struct OpenXMLMerger {
                 lines.append("")
             }
             lines += ["WARNINGS"] + warnings
-            try Data(lines.joined(separator: "\n").utf8).write(to: URL(fileURLWithPath: output.path + ".report.txt"), options: .withoutOverwriting)
+            try ReportStore.write(Data(lines.joined(separator: "\n").utf8), for: output, ".report.txt")
         } catch {
             try? fm.removeItem(at: output)
-            try? fm.removeItem(at: URL(fileURLWithPath: output.path + ".report.json"))
+            ReportStore.remove(for: output, [".report.json", ".report.txt"])
             throw error
         }
         return report

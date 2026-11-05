@@ -23,7 +23,7 @@ struct PresentationTools {
     }
     static func requireNew(_ input:URL,_ output:URL) throws {
         guard input.resolvingSymlinksInPath() != output.resolvingSymlinksInPath(),
-              !fm.fileExists(atPath:output.path),!fm.fileExists(atPath:output.path+".report.json"),!fm.fileExists(atPath:output.path+".report.log") else {
+              !fm.fileExists(atPath:output.path),!ReportStore.collides(output,[".report.json",".report.log"]) else {
             try fail("The output or its report already exists. Choose a new name; the original is not modified.")
         }
     }
@@ -34,10 +34,11 @@ struct PresentationTools {
     }
     static func emit(_ report:ToolReport) throws {
         let enc=JSONEncoder();enc.outputFormatting=[.prettyPrinted,.sortedKeys]
-        try enc.encode(report).write(to:URL(fileURLWithPath:report.output+".report.json"),options:.withoutOverwriting)
+        let output=URL(fileURLWithPath:report.output)
+        try ReportStore.write(try enc.encode(report),for:output,".report.json")
         let warnings=report.pages.flatMap{page in page.warnings.map{"Slide \(page.sourcePage): "+$0}}
         if !warnings.isEmpty {
-            try warnings.joined(separator:"\n").data(using:.utf8)!.write(to:URL(fileURLWithPath:report.output+".report.log"),options:.withoutOverwriting)
+            try ReportStore.write(Data(warnings.joined(separator:"\n").utf8),for:output,".report.log")
         }
     }
     // The result only reaches its final name after every check has passed.
@@ -45,19 +46,10 @@ struct PresentationTools {
     static func publish(_ staged:URL,_ report:ToolReport) throws {
         let output=URL(fileURLWithPath:report.output)
         try fm.copyItem(at:staged,to:output)
-        do {try emit(report)} catch {try? fm.removeItem(at:output);try? fm.removeItem(at:URL(fileURLWithPath:report.output+".report.json"));throw error}
+        do {try emit(report)} catch {try? fm.removeItem(at:output);ReportStore.remove(for:output,[".report.json",".report.log"]);throw error}
     }
-    /// The error log goes to the folder the user chose for the output, never
-    /// next to the original, and never replaces an existing file.
-    static func logFailure(output:URL,error:Error) -> String {
-        let log=output.deletingLastPathComponent().appendingPathComponent("Deckwright-ERROR-"+UUID().uuidString+".log")
-        do {try Data(error.localizedDescription.utf8).write(to:log,options:.withoutOverwriting);return log.path}
-        catch {
-            let fallback=fm.temporaryDirectory.appendingPathComponent(log.lastPathComponent)
-            try? Data(error.localizedDescription.utf8).write(to:fallback,options:.withoutOverwriting)
-            return "Could not write next to the output. Log written to: "+fallback.path
-        }
-    }
+    /// Error logs go to the logs folder (see ReportStore), never next to the files.
+    static func logFailure(output:URL,error:Error) -> String {ReportStore.logFailure(output:output,error:error)}
     /// With a fixed size (Settings) the slides take it and every page is fitted
     /// whole; otherwise they take the first page's proportion.
     static func pdfToPPT(input:URL,output:URL,fixedSize:(Int64,Int64)?=nil) throws -> ToolReport {

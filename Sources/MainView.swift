@@ -228,14 +228,14 @@ struct MainView: View {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([mergeResult]) }
                 Button("Open in PowerPoint") { openInPowerPoint(mergeResult) }
                 Button("Checks per file") { showChecks = true }
-                Button("Open report") { NSWorkspace.shared.open(URL(fileURLWithPath: mergeResult.path + ".report.txt")) }
+                if let report = ReportStore.file(for: mergeResult, ".report.txt") { Button("Open report") { NSWorkspace.shared.open(report) } }
             }
         } else if function != .merge, let toolReport {
             let output = URL(fileURLWithPath: toolReport.output)
             HStack {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([output]) }
                 Button("Open") { NSWorkspace.shared.open(output) }
-                Button("Open report") { NSWorkspace.shared.open(URL(fileURLWithPath: toolReport.output + ".report.json")) }
+                if let report = ReportStore.file(for: output, ".report.json") { Button("Open report") { NSWorkspace.shared.open(report) } }
             }
         }
     }

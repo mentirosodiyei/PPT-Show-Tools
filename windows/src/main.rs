@@ -7,6 +7,7 @@ mod office;
 mod package;
 mod pdf;
 mod powerpoint;
+mod reports;
 mod scaler;
 mod settings;
 mod textfit;
@@ -114,7 +115,7 @@ fn run_cli(all: &[String]) -> i32 {
                         Ok(0)
                     }
                     Err(e) => {
-                        let log = tools::log_failure(&output, &e.to_string());
+                        let log = reports::log_failure(&output, &e.to_string());
                         eprintln!("{e}\nLog: {log}");
                         Ok(1)
                     }
@@ -122,15 +123,15 @@ fn run_cli(all: &[String]) -> i32 {
             }
             "--merge-powerpoint" if args.len() >= 5 => {
                 let report = powerpoint::merge(&paths(3), &PathBuf::from(args[2]), fixed, &|m| eprintln!("{m}"))?;
-                println!("{} slides saved by PowerPoint. Report: {}.report.json", report.power_point_slides, args[2]);
+                println!("{} slides saved by PowerPoint. Report: {}", report.power_point_slides, report_path(args[2]));
                 Ok(if report.passed() { 0 } else { 2 })
             }
             "--merge" if args.len() >= 5 => {
                 let report = merge::merge(&paths(3), &PathBuf::from(args[2]), fixed)?;
-                println!("{} slides. Report: {}.report.json", report.total_slides, args[2]);
+                println!("{} slides. Report: {}", report.total_slides, report_path(args[2]));
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }
-            _ => fail("Usage: Deckwright --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --resize [--size WxH] output.pptx input.pptx\n       Deckwright --pdf-to-ppt output.pptx input.pdf\n       Deckwright --extract-notes output.pptx input.pptx"),
+            _ => fail("Usage: Deckwright --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --resize [--size WxH] output.pptx input.pptx\n       Deckwright --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       Deckwright --extract-notes output.pptx input.pptx"),
         }
     })();
     match result {
@@ -140,6 +141,10 @@ fn run_cli(all: &[String]) -> i32 {
             1
         }
     }
+}
+
+fn report_path(output: &str) -> String {
+    reports::file(std::path::Path::new(output), ".report.json").map(|p| p.display().to_string()).unwrap_or_else(|| "none".into())
 }
 
 fn main() {

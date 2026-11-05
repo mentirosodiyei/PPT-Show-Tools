@@ -1,6 +1,6 @@
 //! Window that reproduces the macOS app: same layout, controls, colours,
 //! texts and behaviour, in light or dark mode following the system.
-use crate::package::{extension, file_name, with_suffix};
+use crate::package::{extension, file_name};
 use crate::settings::{Settings, SizeChoice, PIXEL_RANGE, SIZE_CHOICES};
 use crate::tools::ToolReport;
 use crate::verifier::FileValidation;
@@ -264,6 +264,10 @@ const MERGE_HINT: &str = "Add the presentations in the order you want to merge t
 impl App {
     fn new() -> App {
         let (tx, rx) = channel();
+        // Deletes logs older than 30 days (installed app only).
+        std::thread::spawn(|| {
+            crate::reports::prepare();
+        });
         let settings = Settings::load();
         let mut app = App {
             function: Function::Merge,
@@ -443,7 +447,7 @@ impl App {
                 _ => tools::extract_notes(&source, &output),
             };
             let result = result.map_err(|e| {
-                let log = tools::log_failure(&output, &e.to_string());
+                let log = crate::reports::log_failure(&output, &e.to_string());
                 format!("STOPPED: {e}\nLog: {log}")
             });
             let _ = tx.send(Msg::Tool(result));
@@ -593,8 +597,10 @@ impl App {
                     if mac_button(ui, p, "Checks per file", ButtonKind::Normal, true).clicked() {
                         self.show_checks = true;
                     }
-                    if mac_button(ui, p, "Open report", ButtonKind::Normal, true).clicked() {
-                        open(&with_suffix(&result, ".report.txt"));
+                    if let Some(report) = crate::reports::file(&result, ".report.txt") {
+                        if mac_button(ui, p, "Open report", ButtonKind::Normal, true).clicked() {
+                            open(&report);
+                        }
                     }
                 });
             }
@@ -608,8 +614,10 @@ impl App {
                 if mac_button(ui, p, "Open", ButtonKind::Normal, true).clicked() {
                     open(&output);
                 }
-                if mac_button(ui, p, "Open report", ButtonKind::Normal, true).clicked() {
-                    open(&with_suffix(&output, ".report.json"));
+                if let Some(report) = crate::reports::file(&output, ".report.json") {
+                    if mac_button(ui, p, "Open report", ButtonKind::Normal, true).clicked() {
+                        open(&report);
+                    }
                 }
             });
         }

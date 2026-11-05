@@ -1,6 +1,6 @@
 //! Open XML merge: each imported package is namespaced intact under
 //! pptMerger/sourceN/, so its masters, themes and relative links survive.
-use crate::package::{copy_new, copy_tree, extension, extract, file_name, package_files, with_suffix, write_new, zip_dir, TempDir};
+use crate::package::{copy_new, copy_tree, extension, extract, file_name, package_files, zip_dir, TempDir};
 use crate::verifier::{slide_size, standardize, verify, FileValidation, PackageSnapshot};
 use crate::xml::{read_xml, write_xml, Element, CT_NS, PKG_NS, P_NS, R_NS};
 use crate::{fail, scaler, Result};
@@ -105,6 +105,11 @@ fn part_of(target: &str) -> String {
 }
 
 pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Result<MergeReport> {
+    merge_with(inputs, output, fixed, true)
+}
+
+/// write_reports false: the caller (PowerPoint save) writes its own report.
+pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, write_reports: bool) -> Result<MergeReport> {
     if inputs.len() < 2 {
         return fail("Add at least two presentations.");
     }
@@ -112,7 +117,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Re
     if out_ext != "pptx" && out_ext != "pptm" {
         return fail("The output must be PPTX or PPTM.");
     }
-    if output.exists() || with_suffix(output, ".report.json").exists() || with_suffix(output, ".report.txt").exists() {
+    if output.exists() || (write_reports && crate::reports::collides(output, &[".report.json", ".report.txt"])) {
         return fail("The output file or its report already exists. Choose another name.");
     }
     for input in inputs {
@@ -406,8 +411,11 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Re
         validation_scope: "Structural comparisons against each original; visual rendering, playback and editing not validated.".into(),
     };
     copy_new(&archive, output)?;
+    if !write_reports {
+        return Ok(report);
+    }
     let written = (|| -> Result<()> {
-        write_new(&with_suffix(output, ".report.json"), &crate::to_json(&report)?)?;
+        crate::reports::write(output, ".report.json", &crate::to_json(&report)?)?;
         let mut lines = vec!["DECKWRIGHT — CHECKS PER FILE".to_string(), if passed { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new(), format!("Output size: {}", describe_size(target)), String::new()];
         for (i, check) in report.validation.iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
@@ -420,11 +428,11 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Re
         }
         lines.push("WARNINGS".into());
         lines.extend(warnings);
-        write_new(&with_suffix(output, ".report.txt"), lines.join("\r\n").as_bytes())
+        crate::reports::write(output, ".report.txt", lines.join("\r\n").as_bytes())
     })();
     if let Err(e) = written {
         let _ = std::fs::remove_file(output);
-        let _ = std::fs::remove_file(with_suffix(output, ".report.json"));
+        crate::reports::remove(output, &[".report.json", ".report.txt"]);
         return Err(e);
     }
     Ok(report)

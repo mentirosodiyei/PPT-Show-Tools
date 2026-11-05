@@ -104,13 +104,13 @@ struct PowerPointSave {
     static func merge(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, progress: (String) -> Void = { _ in }) throws -> PowerPointMergeReport {
         let fm = FileManager.default
         guard output.pathExtension.lowercased() == "pptx" else { try fail("Saving with PowerPoint produces PPTX. To keep macros, use Merge with a PPTM output.") }
-        guard !fm.fileExists(atPath: output.path), !fm.fileExists(atPath: output.path + ".report.json"), !fm.fileExists(atPath: output.path + ".report.txt") else { try fail("The output file or its report already exists. Choose another name.") }
+        guard !fm.fileExists(atPath: output.path), !ReportStore.collides(output, [".report.json", ".report.txt"]) else { try fail("The output file or its report already exists. Choose another name.") }
         // PowerPoint is sandboxed: the intermediate lives in the destination folder,
         // so a single folder access grant covers both files.
         let intermediate = output.deletingLastPathComponent().appendingPathComponent("Deckwright-temp-\(UUID().uuidString.prefix(8)).pptx")
-        defer { for suffix in ["", ".report.json", ".report.txt"] { try? fm.removeItem(atPath: intermediate.path + suffix) } }
+        defer { try? fm.removeItem(at: intermediate) }
         progress("Merging and checking…")
-        let openXML = try OpenXMLMerger().merge(inputs: inputs, output: intermediate, fixedSize: fixedSize)
+        let openXML = try OpenXMLMerger().merge(inputs: inputs, output: intermediate, fixedSize: fixedSize, writeReports: false)
         guard openXML.structuralValidationPassed else {
             try fail("The Open XML merge failed its checks; it is not sent to PowerPoint.\n" + openXML.validation.flatMap { v in v.issues.prefix(5).map { v.file + ": " + $0 } }.joined(separator: "\n"))
         }
@@ -136,16 +136,16 @@ struct PowerPointSave {
         let report = PowerPointMergeReport(engine: "Deckwright-OpenXML+PowerPoint-AppleEvents-v0.8.0", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            try encoder.encode(report).write(to: URL(fileURLWithPath: output.path + ".report.json"), options: .withoutOverwriting)
+            try ReportStore.write(try encoder.encode(report), for: output, ".report.json")
             var lines = ["DECKWRIGHT — OPEN XML MERGE SAVED WITH POWERPOINT", passed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", ""]
             for (i, check) in report.validation.enumerated() {
                 lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT"]
                 lines += check.issues.map { "ERROR: " + $0 } + check.needsReview.map { "TO REVIEW: " + $0 } + [""]
             }
             lines += ["WARNINGS"] + warnings
-            try Data(lines.joined(separator: "\n").utf8).write(to: URL(fileURLWithPath: output.path + ".report.txt"), options: .withoutOverwriting)
+            try ReportStore.write(Data(lines.joined(separator: "\n").utf8), for: output, ".report.txt")
         } catch {
-            try? fm.removeItem(at: URL(fileURLWithPath: output.path + ".report.json"))
+            ReportStore.remove(for: output, [".report.json", ".report.txt"])
             throw error
         }
         return report

@@ -42,6 +42,7 @@ struct DeckwrightApp: App {
     init() {
         if CommandLine.arguments.count > 1 { exit(Self.runCommandLine(CommandLine.arguments)) }
         Self.forgetBrokenWindowFrames()
+        DispatchQueue.global(qos: .utility).async { ReportStore.prepare() }  // deletes logs older than 30 days
     }
 
     /// Versions 0.7.0–0.7.2 could save a window as tall as (or taller than) the
@@ -102,10 +103,10 @@ struct DeckwrightApp: App {
                 }
             case "--merge-powerpoint" where args.count >= 5:
                 let report = try PowerPointSave.merge(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed) { fputs($0 + "\n", stderr) }
-                print("\(report.powerPointSlides) slides saved by PowerPoint. Report: \(args[2]).report.json"); return report.passed ? 0 : 2
+                print("\(report.powerPointSlides) slides saved by PowerPoint. Report: \(ReportStore.file(for: URL(fileURLWithPath: args[2]), ".report.json")?.path ?? "none")"); return report.passed ? 0 : 2
             case "--merge" where args.count >= 5:
                 let report = try OpenXMLMerger().merge(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed)
-                print("\(report.totalSlides) slides. Report: \(args[2]).report.json"); return report.structuralValidationPassed ? 0 : 2
+                print("\(report.totalSlides) slides. Report: \(ReportStore.file(for: URL(fileURLWithPath: args[2]), ".report.json")?.path ?? "none")"); return report.structuralValidationPassed ? 0 : 2
             default: break
             }
             try fail("""

@@ -3,7 +3,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !ifndef VERSION
-  !define VERSION "0.7.0"
+  !define VERSION "0.8.0"
 !endif
 !ifndef EXE
   !define EXE "Deckwright.exe"
@@ -48,6 +48,11 @@ Section "Deckwright" SecMain
   SetOutPath "$INSTDIR"
   File "/oname=Deckwright.exe" "${EXE}"
   File "/oname=Deckwright.ico" "..\assets\app.ico"
+  ; Marks this copy as installed: reports and logs go to %LOCALAPPDATA%\Deckwright\Logs
+  ; (deleted after 30 days). The portable zip has no marker and writes nothing.
+  FileOpen $0 "$INSTDIR\Deckwright.installed" w
+  FileWrite $0 "installed"
+  FileClose $0
   WriteUninstaller "$INSTDIR\Uninstall Deckwright.exe"
   CreateShortcut "$SMPROGRAMS\Deckwright.lnk" "$INSTDIR\Deckwright.exe" "" "$INSTDIR\Deckwright.exe" 0
   WriteRegStr HKCU "Software\Deckwright" "InstallDir" "$INSTDIR"
@@ -78,6 +83,7 @@ Section "Uninstall"
   SetShellVarContext current
   Delete "$INSTDIR\Deckwright.exe"
   Delete "$INSTDIR\Deckwright.ico"
+  Delete "$INSTDIR\Deckwright.installed"
   Delete "$INSTDIR\Uninstall Deckwright.exe"
   RMDir "$INSTDIR"
   Delete "$SMPROGRAMS\Deckwright.lnk"
@@ -87,4 +93,7 @@ Section "Uninstall"
   ; Settings saved by the app (slide size).
   Delete "$APPDATA\Deckwright\settings.json"
   RMDir "$APPDATA\Deckwright"
+  ; Reports and error logs.
+  RMDir /r "$LOCALAPPDATA\Deckwright\Logs"
+  RMDir "$LOCALAPPDATA\Deckwright"
 SectionEnd
