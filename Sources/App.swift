@@ -41,6 +41,18 @@ enum SlideSizeChoice: String, CaseIterable, Identifiable {
 struct DeckwrightApp: App {
     init() {
         if CommandLine.arguments.count > 1 { exit(Self.runCommandLine(CommandLine.arguments)) }
+        Self.forgetBrokenWindowFrames()
+    }
+
+    /// Versions 0.7.0–0.7.2 could save a window as tall as (or taller than) the
+    /// screen, and macOS keeps restoring it. Forget saved window frames once, so
+    /// the window opens at its default size again.
+    static func forgetBrokenWindowFrames() {
+        let defaults = UserDefaults.standard, flag = "windowFramesReset-0.7.3"
+        guard !defaults.bool(forKey: flag) else { return }
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("NSWindow Frame") { defaults.removeObject(forKey: key) }
+        defaults.set(true, forKey: flag)
+        defaults.set(true, forKey: WindowFitter.resetPendingKey)
     }
 
     /// Same commands as the Windows build, used by the test suite.

@@ -6,7 +6,7 @@
 # which macOS 28 removes.
 set -eu
 cd "${0:A:h}"
-VERSION=0.7.2
+VERSION=0.7.3
 # Synced folders (iCloud Drive / File Provider) keep re-adding Finder metadata,
 # which makes codesign fail. Build and sign in a private temp folder instead.
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/deckwright-build.XXXXXX")"

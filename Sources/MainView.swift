@@ -68,6 +68,7 @@ struct MainView: View {
             source = nil; toolReport = nil
             status = function == .merge ? "Add the presentations in the order you want to merge them." : "Choose the original file."
         }
+        .background(WindowFitter())
         .sheet(isPresented: $showChecks) { ChecksSheet(validation: validation) { showChecks = false } }
         .sheet(isPresented: $showSettings) { SettingsSheet { showSettings = false } }
     }
@@ -318,4 +319,30 @@ struct SettingsSheet: View {
             HStack { Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction) }
         }.padding(24).frame(width: 480)
     }
+}
+
+/// macOS restores the last window frame. Version 0.7.0 could save a window taller
+/// than the screen, which hid the controls and pushed sheets off screen; a frame
+/// that does not fit the visible screen is replaced by the default size, centred.
+struct WindowFitter: NSViewRepresentable {
+    /// Set when saved frames were just forgotten: open once at the default size.
+    static let resetPendingKey = "windowFrameResetPending"
+    final class Probe: NSView {
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            DispatchQueue.main.async { [weak self] in
+                guard let window = self?.window, let screen = window.screen ?? NSScreen.main else { return }
+                let visible = screen.visibleFrame
+                // Also replace a frame that fills the whole screen height, which only
+                // a restored broken size produces.
+                let pending = UserDefaults.standard.bool(forKey: WindowFitter.resetPendingKey)
+                UserDefaults.standard.removeObject(forKey: WindowFitter.resetPendingKey)
+                guard pending || !visible.contains(window.frame) || window.frame.height >= visible.height - 1 else { return }
+                let size = NSSize(width: min(850, visible.width), height: min(650 + window.frame.height - window.contentLayoutRect.height, visible.height))
+                window.setFrame(NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height), display: true)
+            }
+        }
+    }
+    func makeNSView(context: Context) -> NSView { Probe() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
 }
