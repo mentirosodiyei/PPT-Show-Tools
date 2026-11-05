@@ -2,7 +2,7 @@ import Foundation
 struct OfficePreparedFile:Codable {let name:String;let path:String;let slides:Int;let macroEnabled:Bool}
 struct OfficePreparation:Codable {let width:Int64;let height:Int64;let files:[OfficePreparedFile]}
 struct OfficePipeline {
-    static func prepare(inputs:[URL],destination:URL,fit:Bool) throws -> OfficePreparation {
+    static func prepare(inputs:[URL],destination:URL) throws -> OfficePreparation {
         let fm=FileManager.default
         guard inputs.count>=2,!fm.fileExists(atPath:destination.path) else {try fail("Two inputs and a new preparation folder are required.")}
         let temp=fm.temporaryDirectory.appendingPathComponent("Deckwright-Office-"+UUID().uuidString)
@@ -13,15 +13,14 @@ struct OfficePipeline {
             let root=temp.appendingPathComponent("s\(i)");try fm.createDirectory(at:root,withIntermediateDirectories:true)
             try extractPackage(input,to:root);let doc=try xml(root,"ppt/presentation.xml")
             guard doc.rootElement()?.uri == pNS,let size=list(doc.rootElement()!,"sldSz"),let w=Int64(attr(size,"cx")),let h=Int64(attr(size,"cy")),(minSlideEMU...maxSlideEMU).contains(w),(minSlideEMU...maxSlideEMU).contains(h) else{try fail("Cannot read the size of \(input.lastPathComponent)")}
-            if !SlideScaler.isWidescreen((w,h)) && !fit {throw FormatChoiceRequired(message:"\(input.lastPathComponent) is not 16:9. Choose to fit it without enlarging, or change it yourself.")}
             roots.append(root);docs.append(doc);sizes.append((w,h))
         }
-        let unit=sizes.map{max(($0.0+15)/16,($0.1+8)/9)}.max()!,target=(unit*16,unit*9)
+        let target=try planSlideSize(sizes,fixed:nil)
         try fm.createDirectory(at:destination,withIntermediateDirectories:true)
         var files:[OfficePreparedFile]=[]
         do {
             for i in inputs.indices {
-                try SlideScaler.normalize(package:roots[i],presentation:docs[i],from:sizes[i],to:target,fitWithoutEnlarging:!SlideScaler.isWidescreen(sizes[i]))
+                try SlideScaler.normalize(package:roots[i],presentation:docs[i],from:sizes[i],to:target)
                 let path=destination.appendingPathComponent("source\(i)."+inputs[i].pathExtension.lowercased())
                 try run("/usr/bin/ditto",["-c","-k","--norsrc","--noextattr",roots[i].path,path.path])
                 files.append(OfficePreparedFile(name:inputs[i].lastPathComponent,path:path.path,slides:try orderedParts(roots[i]).count,macroEnabled:fm.fileExists(atPath:roots[i].appendingPathComponent("ppt/vbaProject.bin").path)))

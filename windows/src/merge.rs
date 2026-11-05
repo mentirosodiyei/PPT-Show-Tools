@@ -3,7 +3,7 @@
 use crate::package::{copy_new, copy_tree, extension, extract, file_name, package_files, with_suffix, write_new, zip_dir, TempDir};
 use crate::verifier::{slide_size, standardize, verify, FileValidation, PackageSnapshot};
 use crate::xml::{read_xml, write_xml, Element, CT_NS, PKG_NS, P_NS, R_NS};
-use crate::{fail, scaler, Error, Result};
+use crate::{fail, scaler, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -38,13 +38,6 @@ pub fn describe_size(size: (i64, i64)) -> String {
     format!("{:.0} × {:.0} px ({:.2} × {:.2} cm)", size.0 as f64 / EMU_PER_PIXEL as f64, size.1 as f64 / EMU_PER_PIXEL as f64, size.0 as f64 / 360000.0, size.1 as f64 / 360000.0)
 }
 
-/// Output canvas and, per source, whether it may only shrink (fit with margins)
-/// or is scaled proportionally to the canvas.
-pub struct SlidePlan {
-    pub target: (i64, i64),
-    pub fit_without_enlarging: Vec<bool>,
-}
-
 #[derive(Serialize, Deserialize, Clone, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct MergeReport {
@@ -64,27 +57,23 @@ impl MergeReport {
     }
 }
 
-/// `fixed` is the size forced in Settings; None means automatic: a size shared by
-/// every source (or their common proportion, at the largest size) is kept;
-/// mixed proportions fall back to 16:9, fitting the others only when allowed.
-pub fn plan_slide_size(sizes: &[(i64, i64)], fixed: Option<(i64, i64)>, fit_non_matching: bool, names: &[String]) -> Result<SlidePlan> {
-    let plan = if let Some(target) = fixed {
-        SlidePlan { target, fit_without_enlarging: vec![false; sizes.len()] }
+/// Output slide size. `fixed` is the size forced in Settings; None means
+/// automatic: a size or proportion shared by every source is kept (at the
+/// largest size); mixed proportions use 16:9, at the largest 16:9 source or
+/// 1920 × 1080 px when there is none. Every source is then adapted to it.
+pub fn plan_slide_size(sizes: &[(i64, i64)], fixed: Option<(i64, i64)>) -> Result<(i64, i64)> {
+    let area = |s: &&(i64, i64)| s.0 as i128 * s.1 as i128;
+    let target = if let Some(target) = fixed {
+        target
     } else if !sizes.is_empty() && sizes.iter().all(|s| scaler::same_aspect(*s, sizes[0])) {
-        let largest = *sizes.iter().max_by_key(|s| s.0 as i128 * s.1 as i128).unwrap();
-        SlidePlan { target: largest, fit_without_enlarging: vec![false; sizes.len()] }
+        *sizes.iter().max_by_key(area).unwrap()
+    } else if let Some(wide) = sizes.iter().filter(|s| scaler::is_widescreen(**s)).max_by_key(area) {
+        *wide
     } else {
-        let invalid: Vec<usize> = (0..sizes.len()).filter(|&i| !scaler::is_widescreen(sizes[i])).collect();
-        if !invalid.is_empty() && !fit_non_matching {
-            let details: Vec<String> = invalid.iter().map(|&i| format!("• File {}: “{}” — {}.", i + 1, names[i], describe_size(sizes[i]))).collect();
-            return Err(Error::FormatChoice(format!("These files are not 16:9:\n\n{}\n\nYou can fit them centred without enlarging or cropping, choose an output size in Settings, or stop and change them yourself. The originals are not modified.", details.join("\n"))));
-        }
-        // Smallest exact 16:9 canvas at least as wide AND as high as every source.
-        let unit = sizes.iter().map(|s| ((s.0 + 15) / 16).max((s.1 + 8) / 9)).max().unwrap_or(0);
-        SlidePlan { target: (unit * 16, unit * 9), fit_without_enlarging: sizes.iter().map(|s| !scaler::is_widescreen(*s)).collect() }
+        (1920 * EMU_PER_PIXEL, 1080 * EMU_PER_PIXEL)
     };
-    require_valid_slide_size(plan.target)?;
-    Ok(plan)
+    require_valid_slide_size(target)?;
+    Ok(target)
 }
 
 // Sequence order of children in CT_Presentation (ISO/IEC 29500-1 §19.2.1.26)
@@ -115,7 +104,7 @@ fn part_of(target: &str) -> String {
     }
 }
 
-pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed: Option<(i64, i64)>) -> Result<MergeReport> {
+pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Result<MergeReport> {
     if inputs.len() < 2 {
         return fail("Add at least two presentations.");
     }
@@ -162,14 +151,14 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
     }
     let originals = roots.iter().map(|r| PackageSnapshot::capture(r)).collect::<Result<Vec<_>>>()?;
     let names: Vec<String> = inputs.iter().map(|p| file_name(p)).collect();
-    let plan = plan_slide_size(&sizes, fixed, fit_non_widescreen, &names)?;
-    let target = plan.target;
+    let target = plan_slide_size(&sizes, fixed)?;
     let mut scaling_warnings = vec![];
     for i in 0..sizes.len() {
         if sizes[i] != target {
-            let fit = plan.fit_without_enlarging[i];
-            scaler::normalize(&roots[i], &mut docs[i], sizes[i], target, fit)?;
-            scaling_warnings.push(format!("{}: {} → {}; {}.", names[i], describe_size(sizes[i]), describe_size(target), if fit { "centred without enlarging or cropping" } else { "scaled proportionally and centred" }));
+            // Each presentation is adapted on its own before the merge.
+            scaler::normalize(&roots[i], &mut docs[i], sizes[i], target)?;
+            let adapted = if scaler::same_aspect(sizes[i], target) { "scaled proportionally" } else { "adapted to the new proportion: nothing is stretched; text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped, other objects keep their place" };
+            scaling_warnings.push(format!("{}: {} → {}; {adapted}.", names[i], describe_size(sizes[i]), describe_size(target)));
         }
     }
     let counts: Vec<usize> = docs.iter().map(|d| d.root.child("sldIdLst").map(|l| l.named("sldId").count()).unwrap_or(0)).collect();
@@ -403,10 +392,10 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
     let verification = temp.path().join("verify");
     mkdir(&verification)?;
     extract(&archive, &verification)?;
-    let validation = verify(&originals, inputs, &verification, Some(&plan.fit_without_enlarging))?;
+    let validation = verify(&originals, inputs, &verification)?;
     let passed = validation.iter().all(|v| v.issues.is_empty());
     let report = MergeReport {
-        engine: "Deckwright-OpenXML-v0.7.4-windows".into(),
+        engine: "Deckwright-OpenXML-v0.8.0-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         total_slides: counts.iter().sum(),
         slide_counts: counts,

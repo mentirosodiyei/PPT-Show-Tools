@@ -7,7 +7,7 @@ from test_guards import fixture, BIN
 
 
 class ScalerAndEngineTests(unittest.TestCase):
-    def test_fit_4_3_into_16_9_no_insets_and_scales_motion_and_alternate_content(self):
+    def test_adapt_4_3_into_16_9_keeps_animations_and_alternate_content(self):
         with tempfile.TemporaryDirectory() as d:
             a, b, o = [Path(d) / x for x in ('wide.pptx', 'fourthree.pptx', 'out.pptx')]
             fixture(a, 12192000, 6858000)
@@ -81,7 +81,7 @@ class ScalerAndEngineTests(unittest.TestCase):
                 for n, data in parts.items():
                     z.writestr(n, data)
 
-            r = subprocess.run([str(BIN), '--merge', '--fit-non169', str(o), str(a), str(b)], capture_output=True, text=True)
+            r = subprocess.run([str(BIN), '--merge', str(o), str(a), str(b)], capture_output=True, text=True)
             self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
 
             ns = {
@@ -96,22 +96,25 @@ class ScalerAndEngineTests(unittest.TestCase):
                 for tcPr in root.findall('.//a:tcPr', ns):
                     self.assertEqual(tcPr.attrib, {})
                 self.assertEqual(root.find('.//a:rPr', ns).get('sz'), '2400')
+                # The text box takes the new proportion; the text keeps its size.
                 title_sp = root.find('.//p:sp', ns)
-                self.assertEqual(title_sp.find('.//a:off', ns).attrib, {'x': '1524000', 'y': '100'})
-                self.assertEqual(title_sp.find('.//a:ext', ns).attrib, {'cx': '9144000', 'cy': '6858000'})
+                self.assertEqual(title_sp.find('.//a:off', ns).attrib, {'x': '0', 'y': '100'})
+                self.assertEqual(title_sp.find('.//a:ext', ns).attrib, {'cx': '12192000', 'cy': '6858000'})
+                # A small group near the top-left corner stays there, unchanged inside.
                 grp = root.find('.//p:grpSp', ns)
-                self.assertEqual(grp.find('p:grpSpPr/a:xfrm/a:off', ns).attrib, {'x': '1525000', 'y': '2000'})
+                self.assertEqual(grp.find('p:grpSpPr/a:xfrm/a:off', ns).attrib, {'x': '1000', 'y': '2000'})
                 self.assertEqual(grp.find('p:grpSpPr/a:xfrm/a:chOff', ns).attrib, {'x': '1000', 'y': '2000'})
                 self.assertEqual(grp.find('p:sp/p:spPr/a:xfrm/a:off', ns).attrib, {'x': '1100', 'y': '2100'})
                 choice_off = root.find('.//mc:Choice/p:sp/p:spPr/a:xfrm/a:off', ns)
                 fallback_off = root.find('.//mc:Fallback/p:sp/p:spPr/a:xfrm/a:off', ns)
-                self.assertEqual(choice_off.attrib, {'x': '1524500', 'y': '300'})
-                self.assertEqual(fallback_off.attrib, {'x': '1524500', 'y': '300'})
+                self.assertEqual(choice_off.attrib, {'x': '500', 'y': '300'})
+                self.assertEqual(fallback_off.attrib, {'x': '500', 'y': '300'})
+                # Animation coordinates are fractions of the slide: they stay as they were.
                 motions = root.findall('.//p:animMotion', ns)
-                self.assertEqual(motions[0].get('path'), 'M 0 0 L 0.1875 0.1 E')
-                self.assertEqual(motions[1].get('path'), 'M 0.125 0 L 0.3125 0.1 E')
+                self.assertEqual(motions[0].get('path'), 'M 0 0 L 0.25 0.1 E')
+                self.assertEqual(motions[1].get('path'), 'M 0 0 L 0.25 0.1 E')
                 tav = root.find('.//p:tav', ns)
-                self.assertEqual(tav.get('fmla'), 'ppt_x+0.15')
+                self.assertEqual(tav.get('fmla'), 'ppt_x+0.2')
 
     def test_proportional_scaling_only_injects_bodypr_insets_on_master(self):
         with tempfile.TemporaryDirectory() as d:

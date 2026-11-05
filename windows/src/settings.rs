@@ -74,10 +74,10 @@ impl Settings {
     }
     pub fn summary(&self) -> String {
         match self.slide_size {
-            SizeChoice::Automatic => "automatic".into(),
+            SizeChoice::Automatic => "Automatic (the size every presentation shares; otherwise 16:9)".into(),
             choice => {
                 let (w, h) = choice.pixels().unwrap_or((self.custom_width, self.custom_height));
-                format!("{w} × {h} px")
+                format!("{w} × {h} px{}", if choice == SizeChoice::Custom { " (custom)" } else { "" })
             }
         }
     }

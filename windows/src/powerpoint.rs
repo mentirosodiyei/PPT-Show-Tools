@@ -134,7 +134,7 @@ fn resave(_: &Path, _: &Path, _: usize) -> Result<(usize, bool)> {
     fail("This build saves with PowerPoint for Windows.")
 }
 
-pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, fixed: Option<(i64, i64)>, progress: &dyn Fn(String)) -> Result<PowerPointMergeReport> {
+pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progress: &dyn Fn(String)) -> Result<PowerPointMergeReport> {
     if extension(output) != "pptx" {
         return fail("Saving with PowerPoint produces PPTX. To keep macros, use Merge with a PPTM output.");
     }
@@ -144,7 +144,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, fixed: Option<(i64, i
     let temp = TempDir::new("Deckwright-PowerPoint")?;
     let intermediate = temp.path().join("open-xml-merge.pptx");
     progress("Merging and checking…".into());
-    let open_xml = crate::merge::merge(inputs, &intermediate, fit, fixed)?;
+    let open_xml = crate::merge::merge(inputs, &intermediate, fixed)?;
     if !open_xml.structural_validation_passed() {
         let issues: Vec<String> = open_xml.validation.iter().flat_map(|v| v.issues.iter().take(5).map(move |i| format!("{}: {i}", v.file))).collect();
         return fail(format!("The Open XML merge failed its checks; it is not sent to PowerPoint.\n{}", issues.join("\n")));
@@ -182,7 +182,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, fixed: Option<(i64, i
         .collect();
     let passed = checks.iter().all(|c| c.issues.is_empty());
     let report = PowerPointMergeReport {
-        engine: "Deckwright-OpenXML+PowerPoint-COM-v0.7.4-windows".into(),
+        engine: "Deckwright-OpenXML+PowerPoint-COM-v0.8.0-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         output: output.display().to_string(),
         open_xml,

@@ -12,16 +12,21 @@ struct SlideScaler {
         abs((Double(a.0) / Double(a.1)) / (Double(b.0) / Double(b.1)) - 1) <= 0.001
     }
 
-    static func normalize(package: URL, presentation: XMLDocument, from size: (Int64, Int64), to target: (Int64, Int64), fitWithoutEnlarging: Bool = false) throws {
+    /// Adapts every slide, layout and master to a new size without distorting
+    /// anything and without leaving empty bands:
+    /// - text, pictures, charts, tables and groups keep their proportions, scaled
+    ///   by s = min(sx, sy), the factor that fits the old page in the new one;
+    /// - text boxes, placeholders and connectors take the new proportion (their
+    ///   text reflows at the scaled font size);
+    /// - shapes and pictures spanning the page keep spanning it; pictures are
+    ///   cropped instead of stretched, and so are picture backgrounds;
+    /// - other objects keep their place relative to the nearest edge, or to the
+    ///   centre when they sit in the middle third.
+    /// When the proportion does not change this is plain proportional scaling.
+    /// Animation coordinates are fractions of the slide, so they stay valid.
+    static func normalize(package: URL, presentation: XMLDocument, from size: (Int64, Int64), to target: (Int64, Int64)) throws {
         guard size != target else { return }
-        let factor = fitWithoutEnlarging ? min(1, min(Double(target.0) / Double(size.0), Double(target.1) / Double(size.1))) : min(Double(target.0) / Double(size.0), Double(target.1) / Double(size.1))
-        let shiftX = (Double(target.0) - Double(size.0) * factor) / 2
-        let shiftY = (Double(target.1) - Double(size.1) * factor) / 2
-        let isUnitScale = abs(factor - 1.0) < 1e-9
-        let rx = (factor * Double(size.0)) / Double(target.0)
-        let ry = (factor * Double(size.1)) / Double(target.1)
-        let shiftXNorm = shiftX / Double(target.0)
-        let shiftYNorm = shiftY / Double(target.1)
+        let page = Adaptation(from: size, to: target)
         let fm = FileManager.default
         // Notes and handouts use a separate page coordinate system and must not
         // be scaled just because slide dimensions change. Image/media bytes and
@@ -32,25 +37,24 @@ struct SlideScaler {
             for case let file as URL in files where file.pathExtension == "xml" {
                 let document = try parseXML(at: file)
                 let isMaster = folder == "slideMasters" || folder == "theme"
-                if !isUnitScale {
-                    try scale(document, factor: factor, isMaster: isMaster)
+                // Frames are read before the uniform pass rescales them.
+                var frames: [ShapeFrame] = []
+                if ["slides", "slideLayouts", "slideMasters"].contains(folder),
+                   let tree = try document.nodes(forXPath: "//*[local-name() = 'spTree']").first as? XMLElement {
+                    collectFrames(tree, into: &frames)
                 }
-                if ["slides", "slideLayouts", "slideMasters"].contains(folder) {
-                    if let tree = try document.nodes(forXPath: "//*[local-name() = 'spTree']").first as? XMLElement {
-                        // Translate only top-level transforms (including inside mc:AlternateContent):
-                        // nested group children already move with their parent.
-                        translateContainerChildren(tree, dx: shiftX, dy: shiftY)
-                    }
-                    if let root = document.rootElement() {
-                        scaleTimingAnimations(root, rx: rx, ry: ry, shiftXNorm: shiftXNorm, shiftYNorm: shiftYNorm)
-                    }
+                if !page.isUnit { try scale(document, factor: page.s, isMaster: isMaster) }
+                for frame in frames { page.place(frame) }
+                if let root = document.rootElement(), let bg = try root.nodes(forXPath: ".//*[local-name() = 'bgPr']/*[local-name() = 'blipFill']").first as? XMLElement {
+                    // A picture background always fills the slide: overflow it to the new proportion.
+                    overflowFill(bg, widthGrowth: page.sx, heightGrowth: page.sy)
                 }
                 try serializedXML(document).write(to: file, options: .atomic)
             }
         }
         // Presentation default text styles can contain absolute font sizes.
-        if !isUnitScale, let style = list(presentation.rootElement()!, "defaultTextStyle") {
-            try scaleNode(style, factor: factor, isMaster: true)
+        if !page.isUnit, let style = list(presentation.rootElement()!, "defaultTextStyle") {
+            try scaleNode(style, factor: page.s, isMaster: true)
         }
         let slideSize = list(presentation.rootElement()!, "sldSz")!
         set(slideSize, "cx", String(target.0)); set(slideSize, "cy", String(target.1))
@@ -59,24 +63,104 @@ struct SlideScaler {
         try write(presentation, package, "ppt/presentation.xml")
     }
 
-    private static func translateContainerChildren(_ container: XMLElement, dx: Double, dy: Double) {
-        for shape in container.children ?? [] {
-            guard let shape = shape as? XMLElement else { continue }
+    /// A top-level object and its frame on the original page.
+    struct ShapeFrame {
+        let shape: XMLElement, off: XMLElement, ext: XMLElement
+        let x: Double, y: Double, cx: Double, cy: Double
+        var kind: String { shape.localName ?? "" }
+    }
+
+    private static func collectFrames(_ container: XMLElement, into frames: inout [ShapeFrame]) {
+        for case let shape as XMLElement in container.children ?? [] {
             let local = shape.localName ?? ""
             if local == "AlternateContent" {
-                for branch in (shape.children ?? []).compactMap({ $0 as? XMLElement }) {
-                    if ["Choice", "Fallback"].contains(branch.localName ?? "") {
-                        translateContainerChildren(branch, dx: dx, dy: dy)
-                    }
-                }
+                for branch in children(shape, "Choice") + children(shape, "Fallback") { collectFrames(branch, into: &frames) }
                 continue
             }
             guard ["sp", "pic", "grpSp", "cxnSp", "graphicFrame", "contentPart"].contains(local) else { continue }
             let holder = ["graphicFrame", "contentPart"].contains(local) ? shape : (list(shape, "spPr") ?? list(shape, "grpSpPr"))
-            if let holder, let transform = list(holder, "xfrm"), let offset = list(transform, "off") {
-                for (key, delta) in [("x", dx), ("y", dy)] {
-                    if let value = Double(attr(offset, key)) { set(offset, key, String(Int64((value + delta).rounded()))) }
-                }
+            guard let holder, let transform = list(holder, "xfrm"), let off = list(transform, "off"), let ext = list(transform, "ext"),
+                  let x = Double(attr(off, "x")), let y = Double(attr(off, "y")), let cx = Double(attr(ext, "cx")), let cy = Double(attr(ext, "cy")) else { continue }
+            frames.append(ShapeFrame(shape: shape, off: off, ext: ext, x: x, y: y, cx: cx, cy: cy))
+        }
+    }
+
+    /// Crops a picture fill (a:srcRect, in 1/1000 %) so a box whose width grew by
+    /// `widthGrowth` and height by `heightGrowth` shows it without distortion.
+    static func cropPicture(_ blipFill: XMLElement, widthGrowth: Double, heightGrowth: Double) {
+        let k = widthGrowth / heightGrowth
+        guard abs(k - 1) > 1e-6, list(blipFill, "tile") == nil else { return }
+        var rect = list(blipFill, "srcRect")
+        if rect == nil {
+            let node = XMLElement(name: "a:srcRect", uri: drawingNS)
+            let index = (blipFill.children ?? []).firstIndex { ($0 as? XMLElement)?.localName == "blip" }.map { $0 + 1 } ?? 0
+            blipFill.insertChild(node, at: index)
+            rect = node
+        }
+        guard let rect else { return }
+        func value(_ key: String) -> Double { Double(attr(rect, key)) ?? 0 }
+        if k > 1 {
+            // Wider box: show less height.
+            let visible = 1 - (value("t") + value("b")) / 100000, extra = (visible - visible / k) / 2 * 100000
+            set(rect, "t", String(Int64((value("t") + extra).rounded()))); set(rect, "b", String(Int64((value("b") + extra).rounded())))
+        } else {
+            let visible = 1 - (value("l") + value("r")) / 100000, extra = (visible - visible * k) / 2 * 100000
+            set(rect, "l", String(Int64((value("l") + extra).rounded()))); set(rect, "r", String(Int64((value("r") + extra).rounded())))
+        }
+    }
+
+    /// Backgrounds are cropped the way PowerPoint stores picture-fill offsets:
+    /// a:stretch/a:fillRect extends past the slide (negative values, 1/1000 %)
+    /// on the sides that no longer fit, so the picture keeps its proportion.
+    static func overflowFill(_ blipFill: XMLElement, widthGrowth: Double, heightGrowth: Double) {
+        let k = widthGrowth / heightGrowth
+        guard abs(k - 1) > 1e-6, let stretch = list(blipFill, "stretch") else { return }
+        var rect = list(stretch, "fillRect")
+        if rect == nil { let node = XMLElement(name: "a:fillRect", uri: drawingNS); stretch.addChild(node); rect = node }
+        guard let rect else { return }
+        func value(_ key: String) -> Double { Double(attr(rect, key)) ?? 0 }
+        let (first, second, extra) = k > 1 ? ("t", "b", (k - 1) / 2 * 100000) : ("l", "r", (1 / k - 1) / 2 * 100000)
+        set(rect, first, String(Int64((value(first) - extra).rounded()))); set(rect, second, String(Int64((value(second) - extra).rounded())))
+    }
+
+    /// Geometry of one resize; see `normalize`.
+    struct Adaptation {
+        let width: Double, height: Double, newWidth: Double, newHeight: Double
+        let sx: Double, sy: Double, s: Double
+        var isUnit: Bool { abs(s - 1) < 1e-9 }
+        init(from: (Int64, Int64), to: (Int64, Int64)) {
+            width = Double(from.0); height = Double(from.1); newWidth = Double(to.0); newHeight = Double(to.1)
+            sx = newWidth / width; sy = newHeight / height; s = min(sx, sy)
+        }
+        /// New start and length on one axis.
+        func axis(start: Double, length: Double, page: Double, newPage: Double, factor: Double, stretch: Bool) -> (Double, Double) {
+            if stretch { return (start * factor, length * factor) }
+            let size = length * s, centre = (start + length / 2) / page
+            var position: Double
+            if centre < 1.0 / 3 { position = start * s }                                   // near the start edge
+            else if centre > 2.0 / 3 { position = newPage - (page - start - length) * s - size } // near the end edge
+            else { position = centre * newPage - size / 2 }                                // middle third: keep centred
+            if start >= 0 && start + length <= page { position = min(max(position, 0), max(newPage - size, 0)) }
+            return (position, size)
+        }
+        func place(_ f: ShapeFrame) {
+            let picture = f.kind == "pic" || (f.kind == "sp" && list(f.shape, "spPr").flatMap { list($0, "blipFill") } != nil)
+            let text = f.kind == "sp" && !picture && ((try? f.shape.nodes(forXPath: ".//*[local-name() = 'ph']"))?.isEmpty == false || (try? f.shape.nodes(forXPath: ".//*[local-name() = 't']"))?.contains { !($0.stringValue ?? "").isEmpty } == true)
+            let spansX = f.cx >= 0.9 * width, spansY = f.cy >= 0.9 * height
+            let stretchX: Bool, stretchY: Bool
+            switch f.kind {
+            case "cxnSp": (stretchX, stretchY) = (true, true)
+            case "sp" where text: (stretchX, stretchY) = (true, true)
+            case "sp", "pic": (stretchX, stretchY) = (spansX, spansY)
+            default: (stretchX, stretchY) = (false, false)  // groups, charts, tables, SmartArt: rigid
+            }
+            let (x, w) = axis(start: f.x, length: f.cx, page: width, newPage: newWidth, factor: sx, stretch: stretchX)
+            let (y, h) = axis(start: f.y, length: f.cy, page: height, newPage: newHeight, factor: sy, stretch: stretchY)
+            set(f.off, "x", String(Int64(x.rounded()))); set(f.off, "y", String(Int64(y.rounded())))
+            set(f.ext, "cx", String(Int64(w.rounded()))); set(f.ext, "cy", String(Int64(h.rounded())))
+            if picture, f.cx > 0, f.cy > 0, stretchX || stretchY {
+                let fill = f.kind == "pic" ? list(f.shape, "blipFill") : list(f.shape, "spPr").flatMap { list($0, "blipFill") }
+                if let fill { cropPicture(fill, widthGrowth: w / f.cx, heightGrowth: h / f.cy) }
             }
         }
     }

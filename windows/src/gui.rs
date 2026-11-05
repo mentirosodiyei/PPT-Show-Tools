@@ -221,7 +221,6 @@ impl Function {
 struct Job {
     inputs: Vec<PathBuf>,
     output: PathBuf,
-    fit: bool,
     fixed: Option<(i64, i64)>,
     powerpoint: bool,
 }
@@ -236,7 +235,6 @@ struct Alert {
     title: String,
     text: String,
     buttons: Vec<&'static str>,
-    choice_job: Option<Job>,
 }
 
 struct App {
@@ -294,11 +292,13 @@ impl App {
 
     fn explanation(&self) -> String {
         let size = self.settings.summary();
+        let automatic = self.settings.slide_size == SizeChoice::Automatic;
         match self.function {
-            Function::Merge => format!("Combines the presentations in the order shown. Each one keeps its masters, themes, animations, transitions, media and embedded fonts. Slide size: {size}."),
-            Function::Pdf => "One slide per PDF page, as an image. The slides use the first page's proportion; text is not editable.".into(),
-            Function::Resize if size == "automatic" => "Widens the slides to 16:9 and centres the content without enlarging, stretching or cropping it. Choose another size in Settings.".into(),
-            Function::Resize => format!("Changes the slide size to {size}, scaling the content proportionally and centring it, without stretching or cropping."),
+            Function::Merge => format!("Combines the presentations in the order shown. Each one keeps its masters, themes, animations, transitions, media and embedded fonts, and is adapted to the slide size first. Slide size: {size}."),
+            Function::Pdf if automatic => "One slide per PDF page, as an image, using the first page's proportion; text is not editable. Slide size: Automatic.".into(),
+            Function::Pdf => format!("One slide per PDF page, as an image fitted to {size}; text is not editable."),
+            Function::Resize if automatic => "Widens the slides to 16:9, adapting the layout: nothing is stretched, text boxes and full-width elements follow the new shape. Choose another size in Settings.".into(),
+            Function::Resize => format!("Adapts the slides to {size}: nothing is stretched, text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped."),
             Function::Notes => "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”.".into(),
         }
     }
@@ -335,12 +335,12 @@ impl App {
             };
             let outcome = if job.powerpoint {
                 if crate::powerpoint::available() {
-                    crate::powerpoint::merge(&job.inputs, &job.output, job.fit, job.fixed, &progress).map(|r| (r.passed(), r.power_point_slides, r.validation()))
+                    crate::powerpoint::merge(&job.inputs, &job.output, job.fixed, &progress).map(|r| (r.passed(), r.power_point_slides, r.validation()))
                 } else {
                     Err(Error::Fail("Microsoft PowerPoint was not found.".into()))
                 }
             } else {
-                crate::merge::merge(&job.inputs, &job.output, job.fit, job.fixed).map(|r| (r.structural_validation_passed(), r.total_slides, r.validation))
+                crate::merge::merge(&job.inputs, &job.output, job.fixed).map(|r| (r.structural_validation_passed(), r.total_slides, r.validation))
             };
             let _ = tx.send(Msg::Merged(job, outcome));
             ctx.request_repaint();
@@ -369,7 +369,7 @@ impl App {
             dialog.add_filter("PowerPoint (PPTX)", &["pptx"]).add_filter("PowerPoint with macros (PPTM)", &["pptm"])
         };
         if let Some(output) = dialog.save_file() {
-            self.start_merge(ctx, Job { inputs: self.files.clone(), output, fit: false, fixed, powerpoint });
+            self.start_merge(ctx, Job { inputs: self.files.clone(), output, fixed, powerpoint });
         }
     }
 
@@ -388,12 +388,8 @@ impl App {
                 };
                 if !passed {
                     let text = self.validation.iter().filter(|v| !v.issues.is_empty()).map(|v| format!("{}:\n{}", v.file, v.issues.iter().take(5).cloned().collect::<Vec<_>>().join("\n"))).collect::<Vec<_>>().join("\n\n");
-                    self.alert = Some(Alert { title: "The import is not correct".into(), text, buttons: vec!["OK"], choice_job: None });
+                    self.alert = Some(Alert { title: "The import is not correct".into(), text, buttons: vec!["OK"] });
                 }
-            }
-            Msg::Merged(job, Err(Error::FormatChoice(message))) => {
-                self.busy = false;
-                self.alert = Some(Alert { title: "Some presentations are not 16:9".into(), text: message, buttons: vec!["Stop and edit manually", "Fit without enlarging"], choice_job: Some(job) });
             }
             Msg::Merged(_, Err(Error::Fail(message))) => {
                 self.busy = false;
@@ -442,7 +438,7 @@ impl App {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = match task {
-                Function::Pdf => tools::pdf_to_ppt(&source, &output),
+                Function::Pdf => tools::pdf_to_ppt(&source, &output, fixed),
                 Function::Resize => tools::resize(&source, &output, fixed),
                 _ => tools::extract_notes(&source, &output),
             };
@@ -703,22 +699,27 @@ impl App {
             });
             let custom = settings.slide_size == SizeChoice::Custom;
             let valid = PIXEL_RANGE.contains(&settings.custom_width) && PIXEL_RANGE.contains(&settings.custom_height);
-            ui.add_enabled_ui(custom, |ui| {
+            {
                 ui.horizontal(|ui| {
                     ui.spacing_mut().item_spacing.x = 8.0;
-                    number_field(ui, p, &mut settings.custom_width, &mut wt, "width");
+                    // Typing a size selects Custom, as on the Mac.
+                    if number_field(ui, p, &mut settings.custom_width, &mut wt, "width") {
+                        settings.slide_size = SizeChoice::Custom;
+                    }
                     ui.label(RichText::new("×").font(regular(BODY)).color(p.text));
-                    number_field(ui, p, &mut settings.custom_height, &mut ht, "height");
+                    if number_field(ui, p, &mut settings.custom_height, &mut ht, "height") {
+                        settings.slide_size = SizeChoice::Custom;
+                    }
                     ui.label(RichText::new("px").font(regular(BODY)).color(p.text));
                     if valid {
                         ui.label(RichText::new(format!("{:.2} × {:.2} in", settings.custom_width as f64 / 96.0, settings.custom_height as f64 / 96.0)).font(regular(BODY)).color(p.secondary));
                     }
                 });
-            });
+            }
             if custom && !valid {
                 label(ui, "Each side must be between 96 and 5376 px.", regular(BODY), p.red);
             }
-            label(ui, "Automatic keeps the size when every presentation has the same size or proportion, and uses 16:9 otherwise. A fixed size scales every slide proportionally and centres it; content is never stretched or cropped. Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
+            label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures spanning the slide are cropped. Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
                 if mac_button(ui, p, "Done", ButtonKind::Default, true).clicked() || enter {
@@ -767,15 +768,8 @@ impl App {
                 });
             });
         });
-        if let Some(i) = chosen {
+        if chosen.is_some() {
             self.alert = None;
-            if let Some(job) = alert.choice_job {
-                if i == 1 {
-                    self.start_merge(ctx, Job { fit: true, ..job });
-                } else {
-                    self.status = "Merge stopped. Change the listed files in PowerPoint, or choose a slide size in Settings, and try again. The originals are untouched.".into();
-                }
-            }
         }
     }
 
@@ -797,7 +791,7 @@ impl App {
             self.show_settings = true;
         }
         if std::env::var("DECKWRIGHT_SNAP_ALERT").is_ok() {
-            self.alert = Some(Alert { title: "Some presentations are not 16:9".into(), text: "These files are not 16:9:\n\n• File 2: “Old.pptx” — 960 × 720 px (25.40 × 19.05 cm).\n\nYou can fit them centred without enlarging or cropping, choose an output size in Settings, or stop and change them yourself. The originals are not modified.".into(), buttons: vec!["Stop and edit manually", "Fit without enlarging"], choice_job: None });
+            self.alert = Some(Alert { title: "The import is not correct".into(), text: "Old.pptx:\nslide 1: text missing or changed.".into(), buttons: vec!["OK"] });
         }
     }
 

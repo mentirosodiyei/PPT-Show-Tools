@@ -84,7 +84,9 @@ pub fn log_failure(output: &Path, error: &str) -> String {
     }
 }
 
-pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
+/// With a fixed size (Settings) the slides take it and every page is fitted
+/// whole; otherwise they take the first page's proportion.
+pub fn pdf_to_ppt(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<ToolReport> {
     require_new(input, output)?;
     if extension(output) != "pptx" {
         return fail("The PDF output must be PPTX.");
@@ -104,6 +106,10 @@ pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
     if height > 4032.0 {
         width = width * 4032.0 / height;
         height = 4032.0;
+    }
+    if let Some((w, h)) = fixed {
+        width = w as f64 / 12700.0;
+        height = h as f64 / 12700.0;
     }
     if !height.is_finite() || width < 72.0 || height < 72.0 {
         return fail("PDF page proportion not supported by PowerPoint (each side must be 1–56 in).");
@@ -141,7 +147,11 @@ pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
         output: output.display().to_string(),
         pages,
         checks: strings(&["One slide per page, in order", "PNG images verified by SHA-256", "Proportional fit without cropping"]),
-        limitations: strings(&["PDF text and elements are not editable; images up to 2560 pixels on the long side.", "The output uses the first page's proportion; other pages are fitted with margins.", "PDF annotations and form fields may not appear in the image. PDF links and media are not converted."]),
+        limitations: vec![
+            "PDF text and elements are not editable; images up to 2560 pixels on the long side.".into(),
+            if fixed.is_none() { "The output uses the first page's proportion; other pages are fitted with margins." } else { "Slides use the size chosen in Settings; each page is fitted whole, with margins where its proportion differs." }.into(),
+            "PDF annotations and form fields may not appear in the image. PDF links and media are not converted.".into(),
+        ],
     };
     publish(&staged, &report)?;
     Ok(report)
@@ -259,12 +269,12 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
     let mut pres = read_xml(root.path(), "ppt/presentation.xml")?;
     let Some((w, h)) = crate::verifier::slide_size(&pres.root) else { return fail("Cannot read the slide size.") };
     crate::merge::require_source_size((w, h), &crate::package::file_name(input))?;
-    let (target, fit) = match fixed {
+    let target = match fixed {
         Some(target) => {
             if (w, h) == target {
                 return fail(format!("The presentation is already {}. Nothing to resize.", describe_size(target)));
             }
-            (target, false)
+            target
         }
         None => {
             // Widen only. Never shrink the source page.
@@ -272,17 +282,17 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
                 return fail("The presentation is already 16:9. Choose a slide size in Settings to resize it to another size.");
             }
             let unit = ((w + 15) / 16).max((h + 8) / 9);
-            ((unit * 16, unit * 9), true)
+            (unit * 16, unit * 9)
         }
     };
     require_valid_slide_size(target)?;
-    scaler::normalize(root.path(), &mut pres, (w, h), target, fit)?;
+    scaler::normalize(root.path(), &mut pres, (w, h), target)?;
     let work = TempDir::new("Deckwright-Tools")?;
     let archive = work.path().join("result.zip");
     zip_dir(root.path(), &archive)?;
     let check = TempDir::new("Deckwright-Tools")?;
     extract(&archive, check.path())?;
-    let checks = verify(std::slice::from_ref(&before), &[input.to_path_buf()], check.path(), Some(&[fit]))?;
+    let checks = verify(std::slice::from_ref(&before), &[input.to_path_buf()], check.path())?;
     let issues: Vec<String> = checks.iter().flat_map(|c| c.issues.clone()).collect();
     if !issues.is_empty() {
         return fail(format!("The conversion failed its checks: {}", issues.join("; ")));
@@ -291,10 +301,10 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
     if crate::verifier::slide_size(&out.root) != Some(target) {
         return fail("The expected slide size was not kept.");
     }
-    let canvas = if fit {
-        format!("Canvas {}; content centred without enlarging, stretching or cropping", describe_size(target))
+    let canvas = if scaler::same_aspect((w, h), target) {
+        format!("Canvas {}; content scaled proportionally", describe_size(target))
     } else {
-        format!("Canvas {}; content scaled proportionally and centred, without stretching or cropping", describe_size(target))
+        format!("Canvas {}; layout adapted: nothing is stretched, text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped", describe_size(target))
     };
     let report = ToolReport {
         operation: format!("Resize slides: {} → {}", describe_size((w, h)), describe_size(target)),
@@ -302,7 +312,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
         output: output.display().to_string(),
         pages: (0..before.slides.len()).map(|i| ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] }).collect(),
         checks: vec![canvas, "Order, text, notes, animations, transitions and resources verified after saving".into()],
-        limitations: strings(&["Margins remain when the proportion changes (for example 4:3 to 16:9); the layout is not redesigned to fill them.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
+        limitations: strings(&["Objects keep their size relative to the slide; when the proportion changes, text reflows in wider or narrower boxes. Review the result in PowerPoint.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
     };
     publish(&archive, &report)?;
     Ok(report)

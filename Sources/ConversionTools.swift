@@ -58,7 +58,9 @@ struct PresentationTools {
             return "Could not write next to the output. Log written to: "+fallback.path
         }
     }
-    static func pdfToPPT(input:URL,output:URL) throws -> ToolReport {
+    /// With a fixed size (Settings) the slides take it and every page is fitted
+    /// whole; otherwise they take the first page's proportion.
+    static func pdfToPPT(input:URL,output:URL,fixedSize:(Int64,Int64)?=nil) throws -> ToolReport {
         try requireNew(input,output)
         guard output.pathExtension.lowercased()=="pptx" else {try fail("The PDF output must be PPTX.")}
         guard let document=CGPDFDocument(input as CFURL),document.isUnlocked,document.numberOfPages>0 else {try fail("The PDF cannot be read, is locked or has no pages.")}
@@ -70,6 +72,7 @@ struct PresentationTools {
         // 960 pt wide by default; tall pages are narrowed to stay within PowerPoint's 4032 pt limit.
         var width=960.0,height=width*firstSize.height/firstSize.width
         if height>4032 {width=width*4032/height;height=4032}
+        if let fixedSize {width=Double(fixedSize.0)/12700;height=Double(fixedSize.1)/12700}
         guard height.isFinite,width>=72,height>=72 else {try fail("PDF page proportion not supported by PowerPoint (each side must be 1–56 in).")}
         let root=try temp(),staging=try temp();defer{try? fm.removeItem(at:root);try? fm.removeItem(at:staging)}
         let staged=staging.appendingPathComponent("result.pptx")
@@ -118,7 +121,7 @@ struct PresentationTools {
         for (i,hash) in hashes.enumerated() {
             guard try checksum(Data(contentsOf:check.appendingPathComponent("ppt/media/page\(i+1).png")))==hash else {try fail("The image of page \(i+1) was not preserved.")}
         }
-        let r=ToolReport(operation:"PDF → PowerPoint (images)",source:input.path,output:output.path,pages:pages,checks:["One slide per page, in order","PNG images verified by SHA-256","Proportional fit without cropping"],limitations:["PDF text and elements are not editable; images up to 2560 pixels on the long side.","The output uses the first page's proportion; other pages are fitted with margins.","Annotations and form fields are not rendered. PDF links and media are not converted; pages with annotations produce a warning."])
+        let r=ToolReport(operation:"PDF → PowerPoint (images)",source:input.path,output:output.path,pages:pages,checks:["One slide per page, in order","PNG images verified by SHA-256","Proportional fit without cropping"],limitations:["PDF text and elements are not editable; images up to 2560 pixels on the long side.",fixedSize==nil ? "The output uses the first page's proportion; other pages are fitted with margins." : "Slides use the size chosen in Settings; each page is fitted whole, with margins where its proportion differs.","Annotations and form fields are not rendered. PDF links and media are not converted; pages with annotations produce a warning."])
         try publish(staged,r);return r
     }
     static func notesText(root:URL,slide:String) throws -> String {
@@ -213,12 +216,12 @@ struct PresentationTools {
             guard !SlideScaler.isWidescreen((w,h)) else {try fail("The presentation is already 16:9. Choose a slide size in Settings to resize it to another size.")}
         }
         try requireValidSlideSize(target)
-        try SlideScaler.normalize(package:root,presentation:pres,from:(w,h),to:target,fitWithoutEnlarging:fit)
+        try SlideScaler.normalize(package:root,presentation:pres,from:(w,h),to:target)
         let archive=root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString+".zip");defer{try? fm.removeItem(at:archive)}
         try run("/usr/bin/ditto",["-c","-k","--norsrc","--noextattr",root.path,archive.path])
         let check=try temp();defer{try? fm.removeItem(at:check)}
         try run("/usr/bin/ditto",["-x","-k",archive.path,check.path])
-        let checks=try PackageVerifier.verify(sources:[before],inputs:[input],merged:check,fitWithoutEnlarging:[fit])
+        let checks=try PackageVerifier.verify(sources:[before],inputs:[input],merged:check)
         let issues=checks.flatMap{$0.issues}
         guard issues.isEmpty else {try fail("The conversion failed its checks: "+issues.joined(separator:"; "))}
         // Confirm notes, binary resources, slide order and the explicit canvas.

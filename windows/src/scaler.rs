@@ -1,5 +1,5 @@
-//! Converts physical DrawingML dimensions, never percentages, IDs, rotations,
-//! image crops, animation durations or custom-geometry coordinate systems.
+//! Adapts slides to a new size. Converts physical DrawingML dimensions, never
+//! percentages, IDs, rotations, animation timings or custom-geometry coordinates.
 use crate::xml::{read_xml, write_xml, Document, Element, Node, A_NS, P_NS};
 use crate::Result;
 use std::path::Path;
@@ -24,17 +24,23 @@ fn xml_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), to: (i64, i64), fit_without_enlarging: bool) -> Result<()> {
+/// Adapts every slide, layout and master to a new size without distorting
+/// anything and without leaving empty bands:
+/// - text, pictures, charts, tables and groups keep their proportions, scaled
+///   by s = min(sx, sy), the factor that fits the old page in the new one;
+/// - text boxes, placeholders and connectors take the new proportion (their
+///   text reflows at the scaled font size);
+/// - shapes and pictures spanning the page keep spanning it; pictures are
+///   cropped instead of stretched, and picture backgrounds overflow the slide;
+/// - other objects keep their place relative to the nearest edge, or to the
+///   centre when they sit in the middle third.
+/// When the proportion does not change this is plain proportional scaling.
+/// Animation coordinates are fractions of the slide, so they stay valid.
+pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), to: (i64, i64)) -> Result<()> {
     if from == to {
         return Ok(());
     }
-    let raw = (to.0 as f64 / from.0 as f64).min(to.1 as f64 / from.1 as f64);
-    let factor = if fit_without_enlarging { raw.min(1.0) } else { raw };
-    let shift_x = (to.0 as f64 - from.0 as f64 * factor) / 2.0;
-    let shift_y = (to.1 as f64 - from.1 as f64 * factor) / 2.0;
-    let unit = (factor - 1.0).abs() < 1e-9;
-    let rx = factor * from.0 as f64 / to.0 as f64;
-    let ry = factor * from.1 as f64 / to.1 as f64;
+    let page = Adaptation::new(from, to);
     // Notes and handouts use their own page coordinates; media bytes and
     // embedded workbooks are left untouched.
     for folder in ["slides", "slideLayouts", "slideMasters", "theme", "charts"] {
@@ -45,21 +51,33 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
             let rel = file.strip_prefix(package).unwrap_or(&file).to_string_lossy().replace('\\', "/");
             let mut doc = read_xml(package, &rel)?;
             let is_master = folder == "slideMasters" || folder == "theme";
-            if !unit {
-                scale_node(&mut doc.root, factor, is_master, "");
-            }
-            if ["slides", "slideLayouts", "slideMasters"].contains(&folder) {
+            let layout_part = ["slides", "slideLayouts", "slideMasters"].contains(&folder);
+            // Frames are read before the uniform pass rescales them.
+            let mut frames = vec![];
+            if layout_part {
                 if let Some(tree) = doc.root.first_descendant_mut("spTree") {
-                    translate_container(tree, shift_x, shift_y);
+                    collect_frames(tree, &mut frames);
                 }
-                scale_timing_animations(&mut doc.root, rx, ry, shift_x / to.0 as f64, shift_y / to.1 as f64);
+            }
+            if !page.is_unit() {
+                scale_node(&mut doc.root, page.s, is_master, "");
+            }
+            if layout_part {
+                if let Some(tree) = doc.root.first_descendant_mut("spTree") {
+                    let mut next = frames.into_iter();
+                    place_frames(tree, &page, &mut next);
+                }
+                // A picture background always fills the slide: overflow it to the new proportion.
+                if let Some(bg) = doc.root.first_descendant_mut("bgPr").and_then(|b| b.child_mut("blipFill")) {
+                    overflow_fill(bg, page.sx, page.sy);
+                }
             }
             write_xml(&doc, package, &rel)?;
         }
     }
-    if !unit {
+    if !page.is_unit() {
         if let Some(style) = presentation.root.child_mut("defaultTextStyle") {
-            scale_node(style, factor, true, "presentation");
+            scale_node(style, page.s, true, "presentation");
         }
     }
     if let Some(size) = presentation.root.child_mut("sldSz") {
@@ -71,187 +89,174 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
     write_xml(presentation, package, "ppt/presentation.xml")
 }
 
-fn translate_container(container: &mut Element, dx: f64, dy: f64) {
-    for shape in container.elems_mut() {
-        let local = shape.local().to_string();
-        if local == "AlternateContent" {
-            for branch in shape.elems_mut() {
-                if branch.local() == "Choice" || branch.local() == "Fallback" {
-                    translate_container(branch, dx, dy);
-                }
+/// A top-level object's frame on the original page.
+#[derive(Clone, Copy)]
+struct Frame {
+    x: f64,
+    y: f64,
+    cx: f64,
+    cy: f64,
+}
+
+const SHAPES: [&str; 6] = ["sp", "pic", "grpSp", "cxnSp", "graphicFrame", "contentPart"];
+
+/// The off/ext pair of a top-level object, when it has one.
+fn frame_of(shape: &Element) -> Option<Frame> {
+    let local = shape.local();
+    let holder = if local == "graphicFrame" || local == "contentPart" { Some(shape) } else { shape.child("spPr").or_else(|| shape.child("grpSpPr")) };
+    let t = holder?.child("xfrm")?;
+    let (off, ext) = (t.child("off")?, t.child("ext")?);
+    Some(Frame { x: off.attr("x").parse().ok()?, y: off.attr("y").parse().ok()?, cx: ext.attr("cx").parse().ok()?, cy: ext.attr("cy").parse().ok()? })
+}
+
+fn collect_frames(container: &Element, frames: &mut Vec<Option<Frame>>) {
+    for shape in container.elems() {
+        if shape.local() == "AlternateContent" {
+            for branch in shape.elems().filter(|b| b.local() == "Choice" || b.local() == "Fallback") {
+                collect_frames(branch, frames);
             }
-            continue;
+        } else if SHAPES.contains(&shape.local()) {
+            frames.push(frame_of(shape));
         }
-        if !["sp", "pic", "grpSp", "cxnSp", "graphicFrame", "contentPart"].contains(&local.as_str()) {
-            continue;
+    }
+}
+
+/// Visits the same objects in the same order as `collect_frames`.
+fn place_frames(container: &mut Element, page: &Adaptation, frames: &mut std::vec::IntoIter<Option<Frame>>) {
+    for shape in container.elems_mut() {
+        if shape.local() == "AlternateContent" {
+            for branch in shape.elems_mut().filter(|b| b.local() == "Choice" || b.local() == "Fallback") {
+                place_frames(branch, page, frames);
+            }
+        } else if SHAPES.contains(&shape.local()) {
+            if let Some(Some(frame)) = frames.next() {
+                page.place(shape, frame);
+            }
         }
-        let holder: Option<&mut Element> = if local == "graphicFrame" || local == "contentPart" {
-            Some(shape)
+    }
+}
+
+/// Crops a picture fill (a:srcRect, in 1/1000 %) so a box whose width grew by
+/// `width_growth` and height by `height_growth` shows it without distortion.
+fn crop_picture(blip_fill: &mut Element, width_growth: f64, height_growth: f64) {
+    let k = width_growth / height_growth;
+    if (k - 1.0).abs() <= 1e-6 || blip_fill.child("tile").is_some() {
+        return;
+    }
+    if blip_fill.child("srcRect").is_none() {
+        // srcRect is DrawingML even inside p:blipFill: use the prefix of a:blip.
+        let prefix = blip_fill.child("blip").and_then(|b| b.qname.split_once(':')).map(|(p, _)| format!("{p}:")).unwrap_or_default();
+        let at = blip_fill.children.iter().position(|n| matches!(n, Node::Elem(e) if e.local() == "blip")).map(|i| i + 1).unwrap_or(0);
+        blip_fill.children.insert(at, Node::Elem(Element::new(&format!("{prefix}srcRect"), A_NS)));
+    }
+    let rect = blip_fill.child_mut("srcRect").expect("inserted above");
+    let value = |r: &Element, k: &str| r.attr(k).parse::<f64>().unwrap_or(0.0);
+    let (first, second, visible) = if k > 1.0 { ("t", "b", 1.0 - (value(rect, "t") + value(rect, "b")) / 100000.0) } else { ("l", "r", 1.0 - (value(rect, "l") + value(rect, "r")) / 100000.0) };
+    // Wider box: show less height; narrower box: show less width.
+    let extra = if k > 1.0 { (visible - visible / k) / 2.0 * 100000.0 } else { (visible - visible * k) / 2.0 * 100000.0 };
+    for key in [first, second] {
+        let v = value(rect, key) + extra;
+        rect.set_attr(key, &(v.round() as i64).to_string());
+    }
+}
+
+/// Backgrounds are cropped the way PowerPoint stores picture-fill offsets:
+/// a:stretch/a:fillRect extends past the slide (negative values, 1/1000 %)
+/// on the sides that no longer fit, so the picture keeps its proportion.
+fn overflow_fill(blip_fill: &mut Element, width_growth: f64, height_growth: f64) {
+    let k = width_growth / height_growth;
+    if (k - 1.0).abs() <= 1e-6 {
+        return;
+    }
+    let Some(stretch) = blip_fill.child_mut("stretch") else { return };
+    if stretch.child("fillRect").is_none() {
+        let prefix = stretch.qname.split_once(':').map(|(p, _)| format!("{p}:")).unwrap_or_default();
+        stretch.add(Element::new(&format!("{prefix}fillRect"), A_NS));
+    }
+    let rect = stretch.child_mut("fillRect").expect("inserted above");
+    let (first, second, extra) = if k > 1.0 { ("t", "b", (k - 1.0) / 2.0 * 100000.0) } else { ("l", "r", (1.0 / k - 1.0) / 2.0 * 100000.0) };
+    for key in [first, second] {
+        let v = rect.attr(key).parse::<f64>().unwrap_or(0.0) - extra;
+        rect.set_attr(key, &(v.round() as i64).to_string());
+    }
+}
+
+/// Geometry of one resize; see `normalize`.
+struct Adaptation {
+    width: f64,
+    height: f64,
+    new_width: f64,
+    new_height: f64,
+    sx: f64,
+    sy: f64,
+    s: f64,
+}
+
+impl Adaptation {
+    fn new(from: (i64, i64), to: (i64, i64)) -> Adaptation {
+        let (width, height, new_width, new_height) = (from.0 as f64, from.1 as f64, to.0 as f64, to.1 as f64);
+        let (sx, sy) = (new_width / width, new_height / height);
+        Adaptation { width, height, new_width, new_height, sx, sy, s: sx.min(sy) }
+    }
+    fn is_unit(&self) -> bool {
+        (self.s - 1.0).abs() < 1e-9
+    }
+    /// New start and length on one axis.
+    fn axis(&self, start: f64, length: f64, page: f64, new_page: f64, factor: f64, stretch: bool) -> (f64, f64) {
+        if stretch {
+            return (start * factor, length * factor);
+        }
+        let size = length * self.s;
+        let centre = (start + length / 2.0) / page;
+        let mut position = if centre < 1.0 / 3.0 {
+            start * self.s // near the start edge
+        } else if centre > 2.0 / 3.0 {
+            new_page - (page - start - length) * self.s - size // near the end edge
+        } else {
+            centre * new_page - size / 2.0 // middle third: keep centred
+        };
+        if start >= 0.0 && start + length <= page {
+            position = position.max(0.0).min((new_page - size).max(0.0));
+        }
+        (position, size)
+    }
+    fn place(&self, shape: &mut Element, f: Frame) {
+        let kind = shape.local().to_string();
+        let picture = kind == "pic" || (kind == "sp" && shape.child("spPr").and_then(|p| p.child("blipFill")).is_some());
+        let text = kind == "sp" && !picture && (!shape.descendants("ph").is_empty() || shape.descendants("t").iter().any(|t| !t.text().is_empty()));
+        let (spans_x, spans_y) = (f.cx >= 0.9 * self.width, f.cy >= 0.9 * self.height);
+        let (stretch_x, stretch_y) = match kind.as_str() {
+            "cxnSp" => (true, true),
+            "sp" if text => (true, true),
+            "sp" | "pic" => (spans_x, spans_y),
+            _ => (false, false), // groups, charts, tables, SmartArt: rigid
+        };
+        let (x, w) = self.axis(f.x, f.cx, self.width, self.new_width, self.sx, stretch_x);
+        let (y, h) = self.axis(f.y, f.cy, self.height, self.new_height, self.sy, stretch_y);
+        let holder = if kind == "graphicFrame" || kind == "contentPart" {
+            Some(&mut *shape)
         } else if shape.child("spPr").is_some() {
             shape.child_mut("spPr")
         } else {
             shape.child_mut("grpSpPr")
         };
-        if let Some(offset) = holder.and_then(|h| h.child_mut("xfrm")).and_then(|t| t.child_mut("off")) {
-            for (key, delta) in [("x", dx), ("y", dy)] {
-                if let Some(v) = offset.attr_mut(key) {
-                    if let Ok(n) = v.parse::<f64>() {
-                        *v = ((n + delta).round() as i64).to_string();
-                    }
-                }
+        if let Some(t) = holder.and_then(|h| h.child_mut("xfrm")) {
+            if let Some(off) = t.child_mut("off") {
+                off.set_attr("x", &(x.round() as i64).to_string());
+                off.set_attr("y", &(y.round() as i64).to_string());
+            }
+            if let Some(ext) = t.child_mut("ext") {
+                ext.set_attr("cx", &(w.round() as i64).to_string());
+                ext.set_attr("cy", &(h.round() as i64).to_string());
+            }
+        }
+        if picture && f.cx > 0.0 && f.cy > 0.0 && (stretch_x || stretch_y) {
+            let fill = if kind == "pic" { shape.child_mut("blipFill") } else { shape.child_mut("spPr").and_then(|p| p.child_mut("blipFill")) };
+            if let Some(fill) = fill {
+                crop_picture(fill, w / f.cx, h / f.cy);
             }
         }
     }
-}
-
-pub fn scale_timing_animations(root: &mut Element, rx: f64, ry: f64, sx: f64, sy: f64) {
-    if (rx - 1.0).abs() <= 1e-9 && (ry - 1.0).abs() <= 1e-9 {
-        return;
-    }
-    // Motion paths (origin="parent" absolute commands also shift).
-    for_each_descendant_mut(root, "animMotion", &mut |motion| {
-        let origin_parent = motion.attr("origin") == "parent";
-        if let Some(path) = motion.attr_mut("path") {
-            if !path.is_empty() {
-                *path = scale_motion_path(path, rx, ry, sx, sy, origin_parent);
-            }
-        }
-    });
-    for_each_descendant_mut(root, "anim", &mut |anim| {
-        let names: Vec<String> = anim.descendants("attrName").iter().map(|e| e.text().trim().to_string()).collect();
-        let has = |a: &str, b: &str| names.iter().any(|n| n == a || n == b);
-        let (is_x, is_y, is_w, is_h) = (has("ppt_x", "style.left"), has("ppt_y", "style.top"), has("ppt_w", "style.width"), has("ppt_h", "style.height"));
-        for_each_descendant_mut(anim, "tav", &mut |tav| {
-            let has_formula = tav.has_attr("fmla");
-            if let Some(f) = tav.attr_mut("fmla") {
-                let fmla = f.clone();
-                if (is_x || fmla.contains("ppt_x")) && (rx - 1.0).abs() > 1e-9 {
-                    *f = scale_formula_offsets(&fmla, "ppt_x", rx, sx);
-                } else if (is_y || fmla.contains("ppt_y")) && (ry - 1.0).abs() > 1e-9 {
-                    *f = scale_formula_offsets(&fmla, "ppt_y", ry, sy);
-                } else if (is_w || fmla.contains("ppt_w")) && (rx - 1.0).abs() > 1e-9 {
-                    *f = scale_formula_offsets(&fmla, "ppt_w", rx, 0.0);
-                } else if (is_h || fmla.contains("ppt_h")) && (ry - 1.0).abs() > 1e-9 {
-                    *f = scale_formula_offsets(&fmla, "ppt_h", ry, 0.0);
-                }
-            }
-            if !has_formula {
-                for_each_descendant_mut(tav, "fltVal", &mut |flt| {
-                    if let Some(v) = flt.attr_mut("val") {
-                        if let Ok(n) = v.parse::<f64>() {
-                            if is_x {
-                                *v = format_coord(n * rx + sx)
-                            } else if is_y {
-                                *v = format_coord(n * ry + sy)
-                            } else if is_w {
-                                *v = format_coord(n * rx)
-                            } else if is_h {
-                                *v = format_coord(n * ry)
-                            }
-                        }
-                    }
-                });
-            }
-        });
-    });
-}
-
-/// Calls `f` on every descendant (not `e` itself) named `local`, outermost first,
-/// without descending into a matched element (its own matches are handled by `f`).
-fn for_each_descendant_mut(e: &mut Element, local: &str, f: &mut dyn FnMut(&mut Element)) {
-    for c in e.elems_mut() {
-        if c.local() == local {
-            f(c);
-        } else {
-            for_each_descendant_mut(c, local, f);
-        }
-    }
-}
-
-pub fn scale_formula_offsets(fmla: &str, variable: &str, factor: f64, shift: f64) -> String {
-    let trimmed = fmla.trim_matches(|c| c == ' ' || c == '\t');
-    if !trimmed.contains(variable) {
-        return if shift.abs() > 1e-9 { format!("({trimmed})*{}+{}", format_coord(factor), format_coord(shift)) } else { format!("({trimmed})*{}", format_coord(factor)) };
-    }
-    let pattern = format!(r"^({})\s*([+-])\s*([0-9]+(?:\.[0-9]+)?)$", regex::escape(variable));
-    if let Some(c) = regex::Regex::new(&pattern).ok().and_then(|r| r.captures(trimmed)) {
-        if let Ok(n) = c[3].parse::<f64>() {
-            return format!("{variable}{}{}", &c[2], format_coord(n * factor));
-        }
-    }
-    fmla.to_string()
-}
-
-pub fn scale_motion_path(path: &str, rx: f64, ry: f64, sx: f64, sy: f64, origin_parent: bool) -> String {
-    let mut tokens: Vec<String> = vec![];
-    let mut current = String::new();
-    for ch in path.chars() {
-        if ch.is_whitespace() || ch == ',' {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
-        } else if ch.is_alphabetic() && ch != 'e' && ch != 'E' {
-            if !current.is_empty() {
-                tokens.push(std::mem::take(&mut current));
-            }
-            tokens.push(ch.to_string());
-        } else if ch == 'e' || ch == 'E' {
-            if current.chars().last().map(|l| l.is_numeric() || l == '.').unwrap_or(false) {
-                current.push(ch);
-            } else {
-                if !current.is_empty() {
-                    tokens.push(std::mem::take(&mut current));
-                }
-                tokens.push(ch.to_string());
-            }
-        } else {
-            current.push(ch);
-        }
-    }
-    if !current.is_empty() {
-        tokens.push(current);
-    }
-    let mut out = vec![];
-    let mut command = 'M';
-    let mut index = 0;
-    for token in tokens {
-        let mut chars = token.chars();
-        if let (Some(c), None) = (chars.next(), chars.next()) {
-            if c.is_alphabetic() {
-                command = c;
-                index = 0;
-                out.push(token);
-                continue;
-            }
-        }
-        if let Ok(v) = token.parse::<f64>() {
-            let absolute = origin_parent && command.is_uppercase();
-            let scaled = if index % 2 == 0 { v * rx + if absolute { sx } else { 0.0 } } else { v * ry + if absolute { sy } else { 0.0 } };
-            out.push(format_coord(scaled));
-            index += 1;
-        } else {
-            out.push(token);
-        }
-    }
-    out.join(" ")
-}
-
-pub fn format_coord(value: f64) -> String {
-    if value.abs() < 1e-12 {
-        return "0".into();
-    }
-    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
-    if (rounded - rounded.round()).abs() < 1e-9 {
-        return (rounded.round() as i64).to_string();
-    }
-    let mut s = format!("{rounded:.6}");
-    while s.ends_with('0') {
-        s.pop();
-    }
-    if s.ends_with('.') {
-        s.pop();
-    }
-    s
 }
 
 fn length(node: &mut Element, attribute: &str, factor: f64) {

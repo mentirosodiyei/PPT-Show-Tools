@@ -90,22 +90,6 @@ struct PartFingerprint {
         timingTargetIDs = targetIDs
     }
 
-    /// `fit` says whether the source was only shrunk to fit (true) or scaled to
-    /// the canvas; nil keeps the historical rule (non-16:9 sources were fitted).
-    func expectedTiming(from sourceSize: (Int64, Int64)?, to targetSize: (Int64, Int64)?, fit fitOverride: Bool? = nil) -> String {
-        guard let timingNode, let s = sourceSize, let t = targetSize, s != t else { return timing }
-        let fit = fitOverride ?? !SlideScaler.isWidescreen(s)
-        let rawFactor = min(Double(t.0) / Double(s.0), Double(t.1) / Double(s.1))
-        let factor = fit ? min(1.0, rawFactor) : rawFactor
-        let rx = (Double(s.0) * factor) / Double(t.0)
-        let ry = (Double(s.1) * factor) / Double(t.1)
-        guard abs(rx - 1.0) > 1e-9 || abs(ry - 1.0) > 1e-9 else { return timing }
-        let shiftXNorm = (Double(t.0) - Double(s.0) * factor) / 2.0 / Double(t.0)
-        let shiftYNorm = (Double(t.1) - Double(s.1) * factor) / 2.0 / Double(t.1)
-        guard let copy = timingNode.copy() as? XMLElement else { return timing }
-        SlideScaler.scaleTimingAnimations(copy, rx: rx, ry: ry, shiftXNorm: shiftXNorm, shiftYNorm: shiftYNorm)
-        return semantic(copy)
-    }
 }
 
 struct ResourceLink {
@@ -168,19 +152,13 @@ struct FileValidation: Codable {
 }
 
 struct PackageVerifier {
-    static func verify(sources: [PackageSnapshot], inputs: [URL], merged: URL, fitWithoutEnlarging: [Bool]? = nil) throws -> [FileValidation] {
+    static func verify(sources: [PackageSnapshot], inputs: [URL], merged: URL) throws -> [FileValidation] {
         let ordered = try orderedParts(merged)
         var results: [FileValidation] = [], offset = 0
         let allFiles = packageFiles(merged), names = Set(allFiles)
         var broken: [String] = []
 
-        var mergedSize: (Int64, Int64)? = nil
         let mergedPres = try xml(merged, "ppt/presentation.xml")
-        if let presRoot = mergedPres.rootElement(),
-           let sz = list(presRoot, "sldSz"),
-           let w = Int64(attr(sz, "cx")), let h = Int64(attr(sz, "cy")), w > 0, h > 0 {
-            mergedSize = (w, h)
-        }
 
         // Verify ContentTypes coverage and ID uniqueness across the merged package
         var globalIssues: [String] = []
@@ -243,8 +221,8 @@ struct PackageVerifier {
                 guard names.contains(destination) else { issues.append("Missing slide, layout or master: \(part)"); continue }
                 let imported = try PartFingerprint(xml(merged, destination).rootElement()!)
                 let number = source.slides.firstIndex(of: part).map { "slide \($0 + 1)" } ?? part
-                let expectedTiming = original.expectedTiming(from: source.slideSize, to: mergedSize, fit: fitWithoutEnlarging?[i])
-                if expectedTiming != imported.timing { issues.append("\(number): animation/timing does not match the original (missing or changed).") }
+                // Animation coordinates are fractions of the slide: resizing keeps them.
+                if original.timing != imported.timing { issues.append("\(number): animation/timing does not match the original (missing or changed).") }
                 if original.transition != imported.transition { issues.append("\(number): transition or automatic advance missing/changed.") }
                 if original.text != imported.text { issues.append("\(number): text missing or changed.") }
                 if original.shapeIdentity != imported.shapeIdentity { issues.append("\(number): objects, identifiers or interactive actions missing/changed.") }
@@ -298,9 +276,7 @@ struct PackageVerifier {
         return results
     }
 
-    /// `fixedSize` and `fit` must match the options the output was merged with,
-    /// so animations are checked against the scaling actually applied.
-    static func inspect(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, fit: Bool = true) throws -> [FileValidation] {
+    static func inspect(inputs: [URL], output: URL) throws -> [FileValidation] {
         let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("Deckwright-Check-" + UUID().uuidString)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true); defer { try? fm.removeItem(at: temp) }
         var snapshots: [PackageSnapshot] = []
@@ -310,8 +286,6 @@ struct PackageVerifier {
         }
         let out = temp.appendingPathComponent("out"); try fm.createDirectory(at: out, withIntermediateDirectories: true)
         try extractPackage(output, to: out)
-        let sizes = snapshots.compactMap { $0.slideSize }
-        let plan = sizes.count == snapshots.count ? try? planSlideSize(sizes, fixed: fixedSize, fitNonMatching: fit, names: inputs.map { $0.lastPathComponent }) : nil
-        return try verify(sources: snapshots, inputs: inputs, merged: out, fitWithoutEnlarging: plan?.fitWithoutEnlarging)
+        return try verify(sources: snapshots, inputs: inputs, merged: out)
     }
 }

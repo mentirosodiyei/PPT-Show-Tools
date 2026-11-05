@@ -19,13 +19,11 @@ use std::path::PathBuf;
 #[derive(Debug, Clone)]
 pub enum Error {
     Fail(String),
-    /// Some inputs are not 16:9: the user must choose to fit them or stop.
-    FormatChoice(String),
 }
 impl std::fmt::Display for Error {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Error::Fail(s) | Error::FormatChoice(s) => f.write_str(s),
+            Error::Fail(s) => f.write_str(s),
         }
     }
 }
@@ -56,11 +54,11 @@ fn attach_console() {
 }
 
 fn run_cli(all: &[String]) -> i32 {
-    let fit = all.iter().any(|a| a == "--fit-non169");
     let mut args: Vec<&String> = vec![];
     let mut size: Option<&String> = None;
     let mut i = 0;
     while i < all.len() {
+        // --fit-non169 is accepted for compatibility: every size is now adapted.
         if all[i] == "--fit-non169" {
             i += 1;
             continue;
@@ -89,7 +87,7 @@ fn run_cli(all: &[String]) -> i32 {
         };
         match command {
             "--office-prepare" if args.len() >= 4 => {
-                print_json(&office::prepare(&paths(3), &PathBuf::from(args[2]), fit)?)?;
+                print_json(&office::prepare(&paths(3), &PathBuf::from(args[2]))?)?;
                 Ok(0)
             }
             "--office-verify" if args.len() >= 4 => {
@@ -98,14 +96,14 @@ fn run_cli(all: &[String]) -> i32 {
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
             "--verify" if args.len() >= 5 => {
-                let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]), fixed, true)?;
+                let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]))?;
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
             "--pdf-to-ppt" | "--resize" | "--to-169" | "--extract-notes" if args.len() == 4 => {
                 let (input, output) = (PathBuf::from(args[3]), PathBuf::from(args[2]));
                 let report = match command {
-                    "--pdf-to-ppt" => tools::pdf_to_ppt(&input, &output),
+                    "--pdf-to-ppt" => tools::pdf_to_ppt(&input, &output, fixed),
                     "--extract-notes" => tools::extract_notes(&input, &output),
                     "--to-169" => tools::resize(&input, &output, None),
                     _ => tools::resize(&input, &output, fixed),
@@ -123,12 +121,12 @@ fn run_cli(all: &[String]) -> i32 {
                 }
             }
             "--merge-powerpoint" if args.len() >= 5 => {
-                let report = powerpoint::merge(&paths(3), &PathBuf::from(args[2]), fit, fixed, &|m| eprintln!("{m}"))?;
+                let report = powerpoint::merge(&paths(3), &PathBuf::from(args[2]), fixed, &|m| eprintln!("{m}"))?;
                 println!("{} slides saved by PowerPoint. Report: {}.report.json", report.power_point_slides, args[2]);
                 Ok(if report.passed() { 0 } else { 2 })
             }
             "--merge" if args.len() >= 5 => {
-                let report = merge::merge(&paths(3), &PathBuf::from(args[2]), fit, fixed)?;
+                let report = merge::merge(&paths(3), &PathBuf::from(args[2]), fixed)?;
                 println!("{} slides. Report: {}.report.json", report.total_slides, args[2]);
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }

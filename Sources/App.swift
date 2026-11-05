@@ -57,9 +57,9 @@ struct DeckwrightApp: App {
 
     /// Same commands as the Windows build, used by the test suite.
     static func runCommandLine(_ all: [String]) -> Int32 {
-        let fit = all.contains("--fit-non169")
         var args: [String] = [], size: String?, i = 0
         while i < all.count {
+            // --fit-non169 is accepted for compatibility: every size is now adapted.
             if all[i] == "--fit-non169" { i += 1; continue }
             if all[i] == "--size", i + 1 < all.count { size = all[i + 1]; i += 2; continue }
             args.append(all[i]); i += 1
@@ -78,12 +78,12 @@ struct DeckwrightApp: App {
             let command = args.count > 1 ? args[1] : ""
             switch command {
             case "--office-prepare" where args.count >= 4:
-                try printJSON(try OfficePipeline.prepare(inputs: paths(3), destination: URL(fileURLWithPath: args[2]), fit: fit)); return 0
+                try printJSON(try OfficePipeline.prepare(inputs: paths(3), destination: URL(fileURLWithPath: args[2]))); return 0
             case "--office-verify" where args.count >= 4:
                 let checks = try OfficePipeline.verify(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
             case "--verify" where args.count >= 5:
-                let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed, fit: true)
+                let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
             case "--pdf-to-ppt", "--resize", "--to-169", "--extract-notes":
                 guard args.count == 4 else { break }
@@ -91,7 +91,7 @@ struct DeckwrightApp: App {
                 do {
                     let report: ToolReport
                     switch command {
-                    case "--pdf-to-ppt": report = try PresentationTools.pdfToPPT(input: input, output: output)
+                    case "--pdf-to-ppt": report = try PresentationTools.pdfToPPT(input: input, output: output, fixedSize: fixed)
                     case "--extract-notes": report = try PresentationTools.extractNotes(input: input, output: output)
                     default: report = try PresentationTools.resize(input: input, output: output, fixedSize: command == "--to-169" ? nil : fixed)
                     }
@@ -101,10 +101,10 @@ struct DeckwrightApp: App {
                     fputs(error.localizedDescription + "\nLog: " + log + "\n", stderr); return 1
                 }
             case "--merge-powerpoint" where args.count >= 5:
-                let report = try PowerPointSave.merge(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fitNonWidescreen: fit, fixedSize: fixed) { fputs($0 + "\n", stderr) }
+                let report = try PowerPointSave.merge(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed) { fputs($0 + "\n", stderr) }
                 print("\(report.powerPointSlides) slides saved by PowerPoint. Report: \(args[2]).report.json"); return report.passed ? 0 : 2
             case "--merge" where args.count >= 5:
-                let report = try OpenXMLMerger().merge(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fitNonWidescreen: fit, fixedSize: fixed)
+                let report = try OpenXMLMerger().merge(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed)
                 print("\(report.totalSlides) slides. Report: \(args[2]).report.json"); return report.structuralValidationPassed ? 0 : 2
             default: break
             }

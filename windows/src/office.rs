@@ -3,7 +3,7 @@
 use crate::package::{checksum_file, extension, extract, file_name, zip_dir, TempDir};
 use crate::verifier::{ordered_parts, resolve_part, slide_size, FileValidation, PartFingerprint};
 use crate::xml::{read_xml, Document, Element};
-use crate::{fail, scaler, Error, Result};
+use crate::{fail, scaler, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -23,7 +23,7 @@ pub struct OfficePreparation {
     pub files: Vec<OfficePreparedFile>,
 }
 
-pub fn prepare(inputs: &[PathBuf], destination: &Path, fit: bool) -> Result<OfficePreparation> {
+pub fn prepare(inputs: &[PathBuf], destination: &Path) -> Result<OfficePreparation> {
     if inputs.len() < 2 || destination.exists() {
         return fail("Two inputs and a new preparation folder are required.");
     }
@@ -42,20 +42,16 @@ pub fn prepare(inputs: &[PathBuf], destination: &Path, fit: bool) -> Result<Offi
         let doc = read_xml(&root, "ppt/presentation.xml")?;
         let Some(size) = slide_size(&doc.root).filter(|_| doc.root.ns == crate::xml::P_NS) else { return fail(format!("Cannot read the size of {}", file_name(input))) };
         crate::merge::require_source_size(size, &file_name(input))?;
-        if !scaler::is_widescreen(size) && !fit {
-            return Err(Error::FormatChoice(format!("{} is not 16:9. Choose to fit it without enlarging, or change it yourself.", file_name(input))));
-        }
         roots.push(root);
         docs.push(doc);
         sizes.push(size);
     }
-    let unit = sizes.iter().map(|s| ((s.0 + 15) / 16).max((s.1 + 8) / 9)).max().unwrap_or(0);
-    let target = (unit * 16, unit * 9);
+    let target = crate::merge::plan_slide_size(&sizes, None)?;
     std::fs::create_dir_all(destination).or_else(|e| fail(e.to_string()))?;
     let mut files = vec![];
     let result = (|| -> Result<()> {
         for i in 0..inputs.len() {
-            scaler::normalize(&roots[i], &mut docs[i], sizes[i], target, !scaler::is_widescreen(sizes[i]))?;
+            scaler::normalize(&roots[i], &mut docs[i], sizes[i], target)?;
             let path = destination.join(format!("source{i}.{}", extension(&inputs[i])));
             zip_dir(&roots[i], &path)?;
             files.push(OfficePreparedFile { name: file_name(&inputs[i]), path: path.display().to_string(), slides: ordered_parts(&roots[i])?.len(), macro_enabled: roots[i].join("ppt").join("vbaProject.bin").exists() });

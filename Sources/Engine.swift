@@ -27,32 +27,23 @@ func describeSize(_ size: (Int64, Int64)) -> String {
     let px = String(format: "%.0f × %.0f px", Double(size.0) / Double(emuPerPixel), Double(size.1) / Double(emuPerPixel))
     return px + String(format: " (%.2f × %.2f cm)", locale: Locale(identifier: "en_US_POSIX"), Double(size.0) / 360000, Double(size.1) / 360000)
 }
-/// Output canvas and, per source, whether it may only shrink (fit with margins)
-/// or is scaled proportionally to the canvas.
-struct SlidePlan { let target: (Int64, Int64); let fitWithoutEnlarging: [Bool] }
-/// `fixed` is the size forced in Settings; nil means automatic: a size shared by
-/// every source (or their common proportion, at the largest size) is kept;
-/// mixed proportions fall back to 16:9, fitting the others only when allowed.
-func planSlideSize(_ sizes: [(Int64, Int64)], fixed: (Int64, Int64)?, fitNonMatching: Bool, names: [String]) throws -> SlidePlan {
-    let plan: SlidePlan
+/// Output slide size. `fixed` is the size forced in Settings; nil means
+/// automatic: a size or proportion shared by every source is kept (at the
+/// largest size); mixed proportions use 16:9, at the largest 16:9 source or
+/// 1920 × 1080 px when there is none. Every source is then adapted to it.
+func planSlideSize(_ sizes: [(Int64, Int64)], fixed: (Int64, Int64)?) throws -> (Int64, Int64) {
+    let target: (Int64, Int64)
     if let fixed {
-        plan = SlidePlan(target: fixed, fitWithoutEnlarging: sizes.map { _ in false })
+        target = fixed
     } else if let first = sizes.first, sizes.allSatisfy({ SlideScaler.sameAspect($0, first) }) {
-        let largest = sizes.max { $0.0 * $0.1 < $1.0 * $1.1 }!
-        plan = SlidePlan(target: largest, fitWithoutEnlarging: sizes.map { _ in false })
+        target = sizes.max { $0.0 * $0.1 < $1.0 * $1.1 }!
+    } else if let wide = sizes.filter({ SlideScaler.isWidescreen($0) }).max(by: { $0.0 * $0.1 < $1.0 * $1.1 }) {
+        target = wide
     } else {
-        let invalid = sizes.indices.filter { !SlideScaler.isWidescreen(sizes[$0]) }
-        if !invalid.isEmpty && !fitNonMatching {
-            let details = invalid.map { i in "• File \(i + 1): “\(names[i])” — \(describeSize(sizes[i]))." }.joined(separator: "\n")
-            throw FormatChoiceRequired(message: "These files are not 16:9:\n\n" + details + "\n\nYou can fit them centred without enlarging or cropping, choose an output size in Settings, or stop and change them yourself. The originals are not modified.")
-        }
-        // Smallest exact 16:9 canvas at least as wide AND as high as every
-        // source. This also handles portrait decks and equal-area dimensions.
-        let unit = sizes.map { max(($0.0 + 15) / 16, ($0.1 + 8) / 9) }.max()!
-        plan = SlidePlan(target: (unit * 16, unit * 9), fitWithoutEnlarging: sizes.map { !SlideScaler.isWidescreen($0) })
+        target = (1920 * emuPerPixel, 1080 * emuPerPixel)
     }
-    try requireValidSlideSize(plan.target)
-    return plan
+    try requireValidSlideSize(target)
+    return target
 }
 // Packages are untrusted input. Entry names are checked before anything is
 // written (no absolute or parent paths, no duplicates, also differing only in
@@ -180,10 +171,6 @@ func write(_ doc: XMLDocument, _ root: URL, _ path: String) throws { try seriali
 func list(_ root: XMLElement, _ local: String) -> XMLElement? { children(root, local).first }
 func rid(_ e: XMLElement) -> String { e.attribute(forLocalName: "id", uri: rNS)?.stringValue ?? "" }
 func setRID(_ e: XMLElement, _ value: String) { if let a = e.attribute(forLocalName: "id", uri: rNS) { a.stringValue = value } else { e.addAttribute(XMLNode.attribute(withName: "r:id", uri: rNS, stringValue: value) as! XMLNode) } }
-struct FormatChoiceRequired: LocalizedError {
-    let message: String
-    var errorDescription: String? { message }
-}
 struct MergeReport: Codable {
     let engine: String; let inputFiles: [String]; let slideCounts: [Int]; let totalSlides: Int
     let warnings: [String]; let powerPointPlaybackValidated: Bool
@@ -232,7 +219,7 @@ func insertInPresentationOrder(_ root: XMLElement, _ node: XMLElement) {
 }
 
 struct OpenXMLMerger {
-    func merge(inputs: [URL], output: URL, fitNonWidescreen: Bool = false, fixedSize: (Int64, Int64)? = nil) throws -> MergeReport {
+    func merge(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil) throws -> MergeReport {
         let fm = FileManager.default
         guard inputs.count >= 2 else { try fail("Add at least two presentations.") }
         guard ["pptx", "pptm"].contains(output.pathExtension.lowercased()) else { try fail("The output must be PPTX or PPTM.") }
@@ -263,13 +250,13 @@ struct OpenXMLMerger {
             return (width, height)
         }
         let originals = try roots.map { try PackageSnapshot.capture($0) }
-        let plan = try planSlideSize(sizes, fixed: fixedSize, fitNonMatching: fitNonWidescreen, names: inputs.map { $0.lastPathComponent })
-        let target = plan.target
+        let target = try planSlideSize(sizes, fixed: fixedSize)
         var scalingWarnings: [String] = []
         for i in sizes.indices where sizes[i] != target {
-            let fit = plan.fitWithoutEnlarging[i]
-            try SlideScaler.normalize(package: roots[i], presentation: docs[i], from: sizes[i], to: target, fitWithoutEnlarging: fit)
-            scalingWarnings.append("\(inputs[i].lastPathComponent): \(describeSize(sizes[i])) → \(describeSize(target)); \(fit ? "centred without enlarging or cropping" : "scaled proportionally and centred").")
+            // Each presentation is adapted on its own before the merge.
+            try SlideScaler.normalize(package: roots[i], presentation: docs[i], from: sizes[i], to: target)
+            let sameShape = SlideScaler.sameAspect(sizes[i], target)
+            scalingWarnings.append("\(inputs[i].lastPathComponent): \(describeSize(sizes[i])) → \(describeSize(target)); \(sameShape ? "scaled proportionally" : "adapted to the new proportion: nothing is stretched; text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped, other objects keep their place").")
         }
         let counts = docs.map { children(list($0.rootElement()!, "sldIdLst")!, "sldId").count }
         guard counts.allSatisfy({ $0 > 0 }) else { try fail("One of the presentations has no slides.") }
@@ -448,8 +435,8 @@ struct OpenXMLMerger {
         let verificationRoot = temp.appendingPathComponent("verify")
         try fm.createDirectory(at: verificationRoot, withIntermediateDirectories: true)
         try run("/usr/bin/ditto", ["-x", "-k", archive.path, verificationRoot.path])
-        let validation = try PackageVerifier.verify(sources: originals, inputs: inputs, merged: verificationRoot, fitWithoutEnlarging: plan.fitWithoutEnlarging)
-        let report = MergeReport(engine: "Deckwright-OpenXML-v0.7.4", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
+        let validation = try PackageVerifier.verify(sources: originals, inputs: inputs, merged: verificationRoot)
+        let report = MergeReport(engine: "Deckwright-OpenXML-v0.8.0", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
         try fm.copyItem(at: archive, to: output)
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]

@@ -23,22 +23,25 @@ struct MainView: View {
     @State private var showChecks = false
     @State private var showSettings = false
 
+    private var isAutomatic: Bool { (SlideSizeChoice(rawValue: sizeChoice) ?? .automatic) == .automatic }
     private var sizeSummary: String {
         let choice = SlideSizeChoice(rawValue: sizeChoice) ?? .automatic
-        if choice == .automatic { return "automatic" }
+        if choice == .automatic { return "Automatic (the size every presentation shares; otherwise 16:9)" }
         let (w, h) = choice.pixels ?? (customWidth, customHeight)
-        return "\(w) × \(h) px"
+        return "\(w) × \(h) px" + (choice == .custom ? " (custom)" : "")
     }
     private var explanation: String {
         switch function {
         case .merge:
-            return "Combines the presentations in the order shown. Each one keeps its masters, themes, animations, transitions, media and embedded fonts. Slide size: \(sizeSummary)."
+            return "Combines the presentations in the order shown. Each one keeps its masters, themes, animations, transitions, media and embedded fonts, and is adapted to the slide size first. Slide size: \(sizeSummary)."
         case .pdf:
-            return "One slide per PDF page, as an image. The slides use the first page's proportion; text is not editable."
+            return isAutomatic
+                ? "One slide per PDF page, as an image, using the first page's proportion; text is not editable. Slide size: Automatic."
+                : "One slide per PDF page, as an image fitted to \(sizeSummary); text is not editable."
         case .resize:
-            return sizeSummary == "automatic"
-                ? "Widens the slides to 16:9 and centres the content without enlarging, stretching or cropping it. Choose another size in Settings."
-                : "Changes the slide size to \(sizeSummary), scaling the content proportionally and centring it, without stretching or cropping."
+            return isAutomatic
+                ? "Widens the slides to 16:9, adapting the layout: nothing is stretched, text boxes and full-width elements follow the new shape. Choose another size in Settings."
+                : "Adapts the slides to \(sizeSummary): nothing is stretched, text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped."
         case .notes:
             return "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”."
         }
@@ -127,20 +130,20 @@ struct MainView: View {
         panel.nameFieldStringValue = "Merged presentation.\(isMacro ? "pptm" : "pptx")"
         panel.allowedContentTypes = powerPoint ? [UTType(filenameExtension: "pptx")!] : isMacro ? presentationTypes.reversed() : presentationTypes
         guard panel.runModal() == .OK, let output = panel.url else { return }
-        runMerge(inputs: files, output: output, fit: false, fixed: fixed, powerPoint: powerPoint)
+        runMerge(inputs: files, output: output, fixed: fixed, powerPoint: powerPoint)
     }
 
-    private func runMerge(inputs: [URL], output: URL, fit: Bool, fixed: (Int64, Int64)?, powerPoint: Bool) {
+    private func runMerge(inputs: [URL], output: URL, fixed: (Int64, Int64)?, powerPoint: Bool) {
         busy = true; mergeResult = nil; validation = []
         DispatchQueue.global(qos: .userInitiated).async {
             do {
                 let passed: Bool, slides: Int, checks: [FileValidation]
                 if powerPoint {
                     guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: PowerPointSave.bundleID) != nil else { try fail("Microsoft PowerPoint was not found.") }
-                    let report = try PowerPointSave.merge(inputs: inputs, output: output, fitNonWidescreen: fit, fixedSize: fixed) { message in DispatchQueue.main.async { status = message } }
+                    let report = try PowerPointSave.merge(inputs: inputs, output: output, fixedSize: fixed) { message in DispatchQueue.main.async { status = message } }
                     (passed, slides, checks) = (report.passed, report.powerPointSlides, report.validation)
                 } else {
-                    let report = try OpenXMLMerger().merge(inputs: inputs, output: output, fitNonWidescreen: fit, fixedSize: fixed)
+                    let report = try OpenXMLMerger().merge(inputs: inputs, output: output, fixedSize: fixed)
                     (passed, slides, checks) = (report.structuralValidationPassed, report.totalSlides, report.validation)
                 }
                 DispatchQueue.main.async {
@@ -153,14 +156,6 @@ struct MainView: View {
                         alert.informativeText = checks.filter { !$0.issues.isEmpty }.map { $0.file + ":\n" + $0.issues.prefix(5).joined(separator: "\n") }.joined(separator: "\n\n")
                         alert.runModal()
                     }
-                }
-            } catch let choice as FormatChoiceRequired {
-                DispatchQueue.main.async {
-                    busy = false
-                    let alert = NSAlert(); alert.messageText = "Some presentations are not 16:9"; alert.informativeText = choice.message
-                    alert.addButton(withTitle: "Stop and edit manually"); alert.addButton(withTitle: "Fit without enlarging")
-                    if alert.runModal() == .alertSecondButtonReturn { runMerge(inputs: inputs, output: output, fit: true, fixed: fixed, powerPoint: powerPoint) }
-                    else { status = "Merge stopped. Change the listed files in PowerPoint, or choose a slide size in Settings, and try again. The originals are untouched." }
                 }
             } catch {
                 DispatchQueue.main.async { status = error.localizedDescription; busy = false }
@@ -212,7 +207,7 @@ struct MainView: View {
             do {
                 let report: ToolReport
                 switch task {
-                case .pdf: report = try PresentationTools.pdfToPPT(input: source, output: output)
+                case .pdf: report = try PresentationTools.pdfToPPT(input: source, output: output, fixedSize: fixed)
                 case .resize: report = try PresentationTools.resize(input: source, output: output, fixedSize: fixed)
                 case .notes: report = try PresentationTools.extractNotes(input: source, output: output)
                 case .merge: return
@@ -295,7 +290,21 @@ struct SettingsSheet: View {
     @AppStorage("slideSize") private var sizeChoice = SlideSizeChoice.automatic.rawValue
     @AppStorage("customWidth") private var customWidth = 1920
     @AppStorage("customHeight") private var customHeight = 1080
+    @State private var widthText = ""
+    @State private var heightText = ""
     let close: () -> Void
+    /// Applied as it is typed (not only on Return), and typing selects Custom.
+    private func pixelField(_ title: String, value: Binding<Int>, text: Binding<String>) -> some View {
+        TextField(title, text: text).frame(width: 80)
+            .onAppear { text.wrappedValue = String(value.wrappedValue) }
+            .onChange(of: text.wrappedValue) {
+                let digits = text.wrappedValue.filter(\.isNumber)
+                if digits != text.wrappedValue { text.wrappedValue = digits }
+                guard let number = Int(digits), number != value.wrappedValue else { return }
+                value.wrappedValue = number
+                sizeChoice = SlideSizeChoice.custom.rawValue
+            }
+    }
     private var customValid: Bool { SlideSizeChoice.pixelRange.contains(customWidth) && SlideSizeChoice.pixelRange.contains(customHeight) }
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -305,16 +314,16 @@ struct SettingsSheet: View {
                 ForEach(SlideSizeChoice.allCases) { Text($0.title).tag($0.rawValue) }
             }.pickerStyle(.radioGroup).labelsHidden()
             HStack {
-                TextField("Width", value: $customWidth, format: .number.grouping(.never)).frame(width: 80)
+                pixelField("Width", value: $customWidth, text: $widthText)
                 Text("×")
-                TextField("Height", value: $customHeight, format: .number.grouping(.never)).frame(width: 80)
+                pixelField("Height", value: $customHeight, text: $heightText)
                 Text("px")
                 if customValid { Text(String(format: "%.2f × %.2f in", Double(customWidth) / 96, Double(customHeight) / 96)).foregroundStyle(.secondary) }
-            }.disabled(sizeChoice != SlideSizeChoice.custom.rawValue)
+            }
             if sizeChoice == SlideSizeChoice.custom.rawValue && !customValid {
                 Text("Each side must be between 96 and 5376 px.").foregroundStyle(.red)
             }
-            Text("Automatic keeps the size when every presentation has the same size or proportion, and uses 16:9 otherwise. A fixed size scales every slide proportionally and centres it; content is never stretched or cropped. Pixels are measured as in PowerPoint, at 96 per inch.")
+            Text("Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures spanning the slide are cropped. Pixels are measured as in PowerPoint, at 96 per inch.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack { Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction) }
         }.padding(24).frame(width: 480)

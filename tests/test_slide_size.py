@@ -58,7 +58,7 @@ class SlideSize(unittest.TestCase):
             report = json.loads(Path(str(o) + '.report.json').read_text())
             self.assertTrue(all(not v['issues'] for v in report['validation']))
 
-    def test_fixed_size_scales_content_proportionally_and_centres_it(self):
+    def test_fixed_size_adapts_full_slide_shapes(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d); a, b, o = d / 'a.pptx', d / 'b.pptx', d / 'o.pptx'
             deck(a, 12192000, 6858000, motion=True); deck(b, 12192000, 6858000)
@@ -66,19 +66,19 @@ class SlideSize(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             tw, th = 4800 * PX, 1344 * PX
             self.assertEqual(size_of(o), (tw, th))
-            factor = min(tw / 12192000, th / 6858000)
-            w, h = round(12192000 * factor), round(6858000 * factor)
-            x, y, cx, cy = box(o, 'ppt/slides/slide1.xml')
-            self.assertEqual((cx, cy), (w, h))
-            self.assertEqual((x, y), (round((tw - 12192000 * factor) / 2), round((th - 6858000 * factor) / 2)))
+            # A shape covering the slide keeps covering it, with no empty bands.
+            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (0, 0, tw, th))
             report = json.loads(Path(str(o) + '.report.json').read_text())
             self.assertTrue(all(not v['issues'] for v in report['validation']), report['validation'])
 
-    def test_fixed_size_needs_no_16_9_choice(self):
+    def test_mixed_proportions_need_no_question(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d); a, b, o = d / 'wide.pptx', d / 'old.pptx', d / 'o.pptx'
             deck(a, 12192000, 6858000); deck(b, 9144000, 6858000)
-            self.assertNotEqual(run('--merge', o, a, b).returncode, 0)
+            r = run('--merge', o, a, b)
+            self.assertEqual(r.returncode, 0, r.stderr)
+            self.assertEqual(size_of(o), (12192000, 6858000))
+            o.unlink(); Path(str(o) + '.report.json').unlink(); Path(str(o) + '.report.txt').unlink()
             r = run('--merge', '--size', '1920x1080', o, a, b)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(size_of(o), (1920 * PX, 1080 * PX))
@@ -90,7 +90,7 @@ class SlideSize(unittest.TestCase):
             r = run('--resize', '--size', '1920x1080', o, a)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(size_of(o), (18288000, 10287000))
-            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (2286000, 0, 13716000, 10287000))
+            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (0, 0, 18288000, 10287000))
             again = run('--resize', '--size', '1920x1080', d / 'o2.pptx', o)
             self.assertNotEqual(again.returncode, 0)
             self.assertIn('already', again.stderr)
@@ -103,7 +103,7 @@ class SlideSize(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             w, h = size_of(o)
             self.assertEqual(w * 9, h * 16)
-            self.assertEqual(box(o, 'ppt/slides/slide1.xml')[2:], (9144000, 6858000))
+            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (0, 0, w, h))
 
     def test_sizes_outside_powerpoint_limits_are_refused(self):
         with tempfile.TemporaryDirectory() as d:

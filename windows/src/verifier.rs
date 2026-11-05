@@ -1,6 +1,5 @@
 //! Structural verification of merged packages against their sources.
 use crate::package::{checksum_file, extract, package_files, TempDir};
-use crate::scaler;
 use crate::xml::{read_xml, semantic, Element, A_NS};
 use crate::{fail, Result};
 use serde::{Deserialize, Serialize};
@@ -74,7 +73,6 @@ pub fn slide_size(root: &Element) -> Option<(i64, i64)> {
 #[derive(Clone)]
 pub struct PartFingerprint {
     pub timing: String,
-    timing_node: Option<Element>,
     pub transition: String,
     text: Vec<String>,
     shape_identity: Vec<String>,
@@ -105,7 +103,6 @@ impl PartFingerprint {
         });
         PartFingerprint {
             timing: semantic(t),
-            timing_node: t.cloned(),
             transition: semantic(element.child("transition")),
             text: texts,
             shape_identity: shapes,
@@ -114,27 +111,6 @@ impl PartFingerprint {
         }
     }
 
-    /// `fit` says whether the source was only shrunk to fit (true) or scaled to
-    /// the canvas; None keeps the historical rule (non-16:9 sources were fitted).
-    pub fn expected_timing(&self, source: Option<(i64, i64)>, target: Option<(i64, i64)>, fit: Option<bool>) -> String {
-        let (Some(node), Some(s), Some(t)) = (&self.timing_node, source, target) else { return self.timing.clone() };
-        if s == t {
-            return self.timing.clone();
-        }
-        let fit = fit.unwrap_or(!scaler::is_widescreen(s));
-        let raw = (t.0 as f64 / s.0 as f64).min(t.1 as f64 / s.1 as f64);
-        let factor = if fit { raw.min(1.0) } else { raw };
-        let rx = s.0 as f64 * factor / t.0 as f64;
-        let ry = s.1 as f64 * factor / t.1 as f64;
-        if (rx - 1.0).abs() <= 1e-9 && (ry - 1.0).abs() <= 1e-9 {
-            return self.timing.clone();
-        }
-        let sx = (t.0 as f64 - s.0 as f64 * factor) / 2.0 / t.0 as f64;
-        let sy = (t.1 as f64 - s.1 as f64 * factor) / 2.0 / t.1 as f64;
-        let mut copy = node.clone();
-        scaler::scale_timing_animations(&mut copy, rx, ry, sx, sy);
-        semantic(Some(&copy))
-    }
 }
 
 #[derive(Clone)]
@@ -164,7 +140,6 @@ pub struct PackageSnapshot {
     has_vba: bool,
     embedded_fonts: Vec<String>,
     links: BTreeMap<String, Vec<ResourceLink>>,
-    slide_size: Option<(i64, i64)>,
 }
 
 impl PackageSnapshot {
@@ -173,7 +148,6 @@ impl PackageSnapshot {
         let mut notes = BTreeMap::new();
         let mut binaries = BTreeMap::new();
         let mut links = BTreeMap::new();
-        let size = read_xml(root, "ppt/presentation.xml").ok().and_then(|d| slide_size(&d.root));
         for file in package_files(root) {
             if file.ends_with(".rels") && ["ppt/slides/", "ppt/slideLayouts/", "ppt/slideMasters/", "ppt/notesSlides/"].iter().any(|p| file.starts_with(p)) {
                 let d = read_xml(root, &file)?;
@@ -195,7 +169,6 @@ impl PackageSnapshot {
             has_vba: crate::xml::part_path(root, "ppt/vbaProject.bin").exists(),
             embedded_fonts: embedded_typefaces(root),
             links,
-            slide_size: size,
         })
     }
 }
@@ -213,12 +186,11 @@ pub struct FileValidation {
     pub needs_review: Vec<String>,
 }
 
-pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path, fit_without_enlarging: Option<&[bool]>) -> Result<Vec<FileValidation>> {
+pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) -> Result<Vec<FileValidation>> {
     let ordered = ordered_parts(merged)?;
     let all_files = package_files(merged);
     let names: HashSet<String> = all_files.iter().cloned().collect();
     let merged_pres = read_xml(merged, "ppt/presentation.xml")?;
-    let merged_size = slide_size(&merged_pres.root);
     let mut global = vec![];
     if read_xml(merged, "[Content_Types].xml").is_err() {
         global.push("[Content_Types].xml is missing or unreadable in the merged package.".into());
@@ -298,7 +270,8 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path, fi
             }
             let imported = PartFingerprint::new(&read_xml(merged, &destination)?.root);
             let number = source.slides.iter().position(|s| s == part).map(|n| format!("slide {}", n + 1)).unwrap_or_else(|| part.clone());
-            if original.expected_timing(source.slide_size, merged_size, fit_without_enlarging.and_then(|f| f.get(i).copied())) != imported.timing {
+            // Animation coordinates are fractions of the slide: resizing keeps them.
+            if original.timing != imported.timing {
                 issues.push(format!("{number}: animation/timing does not match the original (missing or changed)."));
             }
             if original.transition != imported.transition {
@@ -390,7 +363,7 @@ fn embedded_typefaces(root: &Path) -> Vec<String> {
 
 /// `fixed` and `fit` must match the options the output was merged with, so
 /// animations are checked against the scaling actually applied.
-pub fn inspect(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, fit: bool) -> Result<Vec<FileValidation>> {
+pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
     let temp = TempDir::new("Deckwright-Check")?;
     let mut snapshots = vec![];
     for (i, input) in inputs.iter().enumerate() {
@@ -402,8 +375,5 @@ pub fn inspect(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, fit
     let out = temp.path().join("out");
     std::fs::create_dir_all(&out).or_else(|e| fail(e.to_string()))?;
     extract(output, &out)?;
-    let sizes: Vec<(i64, i64)> = snapshots.iter().filter_map(|s| s.slide_size).collect();
-    let names: Vec<String> = inputs.iter().map(|p| crate::package::file_name(p)).collect();
-    let plan = if sizes.len() == snapshots.len() { crate::merge::plan_slide_size(&sizes, fixed, fit, &names).ok() } else { None };
-    verify(&snapshots, inputs, &out, plan.as_ref().map(|p| p.fit_without_enlarging.as_slice()))
+    verify(&snapshots, inputs, &out)
 }
