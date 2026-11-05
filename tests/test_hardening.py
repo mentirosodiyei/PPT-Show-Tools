@@ -26,17 +26,17 @@ class Hardening(unittest.TestCase):
    fixture(a);fixture(b,9144000,6858000);with_symlink(b,evil,secret)
    for args,out in [(['--merge',str(d/'m.pptx'),str(a),str(evil)],d/'m.pptx'),(['--to-169',str(d/'w.pptx'),str(evil)],d/'w.pptx'),(['--extract-notes',str(d/'n.pptx'),str(evil)],d/'n.pptx')]:
     r=subprocess.run([str(BIN)]+args,capture_output=True,text=True)
-    self.assertNotEqual(r.returncode,0,args);self.assertIn('enllaços simbòlics',r.stderr);self.assertFalse(out.exists())
+    self.assertNotEqual(r.returncode,0,args);self.assertIn('symbolic links',r.stderr);self.assertFalse(out.exists())
  def test_non_zip_input_is_rejected_cleanly(self):
   with tempfile.TemporaryDirectory() as d:
    d=Path(d);bad=d/'bad.pptx';bad.write_bytes(b'not a zip');a=d/'a.pptx';fixture(a)
    r=subprocess.run([str(BIN),'--merge',str(d/'o.pptx'),str(a),str(bad)],capture_output=True,text=True)
-   self.assertEqual(r.returncode,1);self.assertIn('no és un paquet ZIP',r.stderr)
+   self.assertEqual(r.returncode,1);self.assertIn('is not a valid PowerPoint ZIP',r.stderr)
  def test_already_widescreen_is_not_converted(self):
   with tempfile.TemporaryDirectory() as d:
    d=Path(d);a=d/'wide.pptx';fixture(a)
    r=subprocess.run([str(BIN),'--to-169',str(d/'o.pptx'),str(a)],capture_output=True,text=True)
-   self.assertNotEqual(r.returncode,0);self.assertIn('ja és 16:9',r.stderr);self.assertFalse((d/'o.pptx').exists())
+   self.assertNotEqual(r.returncode,0);self.assertIn('already 16:9',r.stderr);self.assertFalse((d/'o.pptx').exists())
  def test_very_tall_pdf_stays_within_powerpoint_limits(self):
   with tempfile.TemporaryDirectory() as d:
    d=Path(d);a,o=d/'tall.pdf',d/'o.pptx';tiny_pdf(a,200,2000)
@@ -59,7 +59,7 @@ class Hardening(unittest.TestCase):
    with zipfile.ZipFile(a,'w') as z:
     for n,v in parts.items():z.writestr(n,v)
    r=subprocess.run([str(BIN),'--extract-notes',str(o),str(a)],capture_output=True,text=True)
-   self.assertNotEqual(r.returncode,0);self.assertIn('massa llargues',r.stderr);self.assertFalse(o.exists())
+   self.assertNotEqual(r.returncode,0);self.assertIn('too long',r.stderr);self.assertFalse(o.exists())
  def test_existing_report_log_is_never_overwritten(self):
   with tempfile.TemporaryDirectory() as d:
    d=Path(d);a,o=d/'n.pptx',d/'o.pptx';notes_fixture(a);log=Path(str(o)+'.report.log');log.write_text('keep')

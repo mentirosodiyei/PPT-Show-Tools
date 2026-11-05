@@ -55,11 +55,11 @@ pub fn ordered_parts(root: &Path) -> Result<Vec<String>> {
     let d = read_xml(root, "ppt/presentation.xml")?;
     let r = read_xml(root, "ppt/_rels/presentation.xml.rels")?;
     let rels: HashMap<String, String> = r.root.named("Relationship").map(|e| (e.attr("Id").to_string(), e.attr("Target").to_string())).collect();
-    let Some(ids) = d.root.child("sldIdLst") else { return fail("Falta la llista de diapositives.") };
+    let Some(ids) = d.root.child("sldIdLst") else { return fail("The slide list is missing.") };
     ids.named("sldId")
         .map(|e| match rels.get(e.rid()) {
             Some(t) => Ok(resolve_part("ppt/presentation.xml", t)),
-            None => fail("Falta una relació de diapositiva."),
+            None => fail("A slide relationship is missing."),
         })
         .collect()
 }
@@ -114,12 +114,14 @@ impl PartFingerprint {
         }
     }
 
-    pub fn expected_timing(&self, source: Option<(i64, i64)>, target: Option<(i64, i64)>) -> String {
+    /// `fit` says whether the source was only shrunk to fit (true) or scaled to
+    /// the canvas; None keeps the historical rule (non-16:9 sources were fitted).
+    pub fn expected_timing(&self, source: Option<(i64, i64)>, target: Option<(i64, i64)>, fit: Option<bool>) -> String {
         let (Some(node), Some(s), Some(t)) = (&self.timing_node, source, target) else { return self.timing.clone() };
         if s == t {
             return self.timing.clone();
         }
-        let fit = !scaler::is_widescreen(s);
+        let fit = fit.unwrap_or(!scaler::is_widescreen(s));
         let raw = (t.0 as f64 / s.0 as f64).min(t.1 as f64 / s.1 as f64);
         let factor = if fit { raw.min(1.0) } else { raw };
         let rx = s.0 as f64 * factor / t.0 as f64;
@@ -209,7 +211,7 @@ pub struct FileValidation {
     pub needs_review: Vec<String>,
 }
 
-pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) -> Result<Vec<FileValidation>> {
+pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path, fit_without_enlarging: Option<&[bool]>) -> Result<Vec<FileValidation>> {
     let ordered = ordered_parts(merged)?;
     let all_files = package_files(merged);
     let names: HashSet<String> = all_files.iter().cloned().collect();
@@ -222,14 +224,14 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
         for file in all_files.iter().filter(|f| *f != "[Content_Types].xml") {
             let ext = if file.ends_with(".rels") { "rels".to_string() } else { file.rsplit_once('.').map(|(_, e)| e.to_lowercase()).filter(|_| file.rsplit('/').next().unwrap_or("").contains('.')).unwrap_or_default() };
             if !overrides.contains(file) && !defaults.contains(&ext) {
-                global.push(format!("Falta ContentType al paquet fusionat: {file}"));
+                global.push(format!("Missing content type in the merged package: {file}"));
             }
         }
     }
     if let Some(ids) = merged_pres.root.child("sldIdLst") {
         let v: Vec<&str> = ids.named("sldId").map(|e| e.attr("id")).collect();
         if v.iter().collect::<HashSet<_>>().len() != v.len() {
-            global.push("IDs de diapositiva (sldId) duplicats a presentation.xml.".into());
+            global.push("Duplicate slide IDs (sldId) in presentation.xml.".into());
         }
     }
     let mut master_ids: Vec<String> = merged_pres.root.child("sldMasterIdLst").map(|m| m.named("sldMasterId").map(|e| e.attr("id").to_string()).collect()).unwrap_or_default();
@@ -239,7 +241,7 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
         }
     }
     if master_ids.iter().collect::<HashSet<_>>().len() != master_ids.len() {
-        global.push("IDs de patró o disseny (sldMasterId/sldLayoutId) duplicats al paquet fusionat.".into());
+        global.push("Duplicate master or layout IDs (sldMasterId/sldLayoutId) in the merged package.".into());
     }
     let mut broken = vec![];
     for file in &all_files {
@@ -269,72 +271,72 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
         let expected: Vec<String> = source.slides.iter().map(|s| format!("{prefix}{s}")).collect();
         let actual: Vec<String> = ordered.iter().skip(offset).take(expected.len()).cloned().collect();
         if actual != expected {
-            issues.push("El nombre o l’ordre de les diapositives no coincideix amb l’original.".into());
+            issues.push("The number or order of slides does not match the original.".into());
         }
         for (part, original) in &source.parts {
             let destination = format!("{prefix}{part}");
             if !names.contains(&destination) {
-                issues.push(format!("Falta la diapositiva, el disseny o el patró: {part}"));
+                issues.push(format!("Missing slide, layout or master: {part}"));
                 continue;
             }
             let imported = PartFingerprint::new(&read_xml(merged, &destination)?.root);
-            let number = source.slides.iter().position(|s| s == part).map(|n| format!("diapositiva {}", n + 1)).unwrap_or_else(|| part.clone());
-            if original.expected_timing(source.slide_size, merged_size) != imported.timing {
-                issues.push(format!("{number}: l’animació/temporització no coincideix amb l’original (absent o modificada)."));
+            let number = source.slides.iter().position(|s| s == part).map(|n| format!("slide {}", n + 1)).unwrap_or_else(|| part.clone());
+            if original.expected_timing(source.slide_size, merged_size, fit_without_enlarging.and_then(|f| f.get(i).copied())) != imported.timing {
+                issues.push(format!("{number}: animation/timing does not match the original (missing or changed)."));
             }
             if original.transition != imported.transition {
-                issues.push(format!("{number}: transició o avançament automàtic absent/modificat."));
+                issues.push(format!("{number}: transition or automatic advance missing/changed."));
             }
             if original.text != imported.text {
-                issues.push(format!("{number}: text absent o modificat."));
+                issues.push(format!("{number}: text missing or changed."));
             }
             if original.shape_identity != imported.shape_identity {
-                issues.push(format!("{number}: objectes, identificadors o accions interactives absents/modificats."));
+                issues.push(format!("{number}: objects, identifiers or interactive actions missing/changed."));
             }
             let valid: HashSet<&String> = original.timing_target_ids.intersection(&original.shape_ids).collect();
             if !valid.iter().all(|id| imported.shape_ids.contains(*id)) {
-                issues.push(format!("{number}: referència d’animació (spid) òrfena cap a un objecte inexistent."));
+                issues.push(format!("{number}: orphan animation reference (spid) to a missing object."));
             }
         }
         for (part, links) in &source.links {
             let destination = format!("{prefix}{part}");
             if !names.contains(&destination) {
-                issues.push(format!("Falten relacions de recursos: {part}"));
+                issues.push(format!("Missing resource relationships: {part}"));
                 continue;
             }
             let doc = read_xml(merged, &destination)?;
             let imported: Vec<&Element> = doc.root.named("Relationship").collect();
             for link in links.iter().filter(|l| !l.kind.ends_with("/notesMaster")) {
                 let Some(rel) = imported.iter().find(|r| r.attr("Id") == link.id) else {
-                    issues.push(format!("Falta la relació {} a {part}", link.id));
+                    issues.push(format!("Missing relationship {} in {part}", link.id));
                     continue;
                 };
                 let expected = if link.external { link.target.clone() } else { format!("{prefix}{}", resolve_part(&owner_of_rels(part), &link.target)) };
                 let actual = if link.external { rel.attr("Target").to_string() } else { resolve_part(&owner_of_rels(&destination), rel.attr("Target")) };
                 if actual != expected || rel.attr("Type") != link.kind || (rel.attr("TargetMode") == "External") != link.external {
-                    issues.push(format!("Recurs enllaçat incorrectament: {part}, relació {}", link.id));
+                    issues.push(format!("Wrongly linked resource: {part}, relationship {}", link.id));
                 }
             }
         }
         for (part, original) in &source.notes {
             let destination = format!("{prefix}{part}");
             if !names.contains(&destination) || semantic(Some(&read_xml(merged, &destination)?.root)) != *original {
-                issues.push(format!("Notes absents o modificades: {part}"));
+                issues.push(format!("Notes missing or changed: {part}"));
             }
         }
         for (part, original) in &source.binaries {
             let destination = format!("{prefix}{part}");
             if !names.contains(&destination) || checksum(&read_file(&crate::xml::part_path(merged, &destination))?) != *original {
-                issues.push(format!("Recurs multimèdia/font/objecte incrustat absent o modificat: {part}"));
+                issues.push(format!("Media, font or embedded object missing or changed: {part}"));
             }
         }
-        issues.extend(broken.iter().filter(|b| if i == 0 { !b.starts_with("pptMerger/") } else { b.starts_with(&prefix) }).map(|b| format!("Relació interna trencada: {b}")));
+        issues.extend(broken.iter().filter(|b| if i == 0 { !b.starts_with("pptMerger/") } else { b.starts_with(&prefix) }).map(|b| format!("Broken internal relationship: {b}")));
         if i == sources.len() - 1 && ordered.len() != sources.iter().map(|s| s.slides.len()).sum::<usize>() {
-            issues.push("El recompte total de diapositives no coincideix.".into());
+            issues.push("The total slide count does not match.".into());
         }
-        let mut review = vec!["No comprovat: aspecte visual, geometria final, fonts heretades, reproducció d’animacions/àudio/vídeo, edició i enllaços externs.".to_string()];
+        let mut review = vec!["Not checked: visual appearance, final geometry, inherited fonts, animation/audio/video playback, editing and external links.".to_string()];
         if source.has_vba {
-            review.push(if i == 0 { "VBA del primer fitxer conservat, però funcionament no comprovat." } else { "El projecte VBA d’aquest fitxer no s’ha integrat: importació incompleta si depèn de macros." }.into());
+            review.push(if i == 0 { "The first file's VBA is kept, but not tested." } else { "This file's VBA project was not merged: the import is incomplete if it relies on macros." }.into());
         }
         results.push(FileValidation {
             file: crate::package::file_name(&inputs[i]),
@@ -343,13 +345,13 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
             slides_with_animation: source.slides.iter().filter(|s| source.parts.get(*s).map(|p| p.timing != "ABSENT").unwrap_or(false)).count(),
             binary_resources_checked: source.binaries.len(),
             checks: [
-                "Ordre i nombre de diapositives",
-                "Arbres complets d’animacions i temporitzacions (també patrons i dissenys) i integritat de spid",
-                "Transicions i avançaments automàtics",
-                "Text, objectes i accions",
-                "Contingut i patró de notes",
-                "Hash SHA-256 dels recursos multimèdia, fonts i objectes incrustats",
-                "XML, ContentTypes, unicitat d’IDs i relacions internes",
+                "Slide order and count",
+                "Full animation and timing trees (also masters and layouts) and spid integrity",
+                "Transitions and automatic advance",
+                "Text, objects and actions",
+                "Notes content and master",
+                "SHA-256 of media, fonts and embedded objects",
+                "XML, content types, unique IDs and internal relationships",
             ]
             .iter()
             .map(|s| s.to_string())
@@ -363,7 +365,7 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
 }
 
 pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
-    let temp = TempDir::new("PPTCheck")?;
+    let temp = TempDir::new("Deckwright-Check")?;
     let mut snapshots = vec![];
     for (i, input) in inputs.iter().enumerate() {
         let dir = temp.path().join(format!("s{i}"));
@@ -374,5 +376,5 @@ pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>>
     let out = temp.path().join("out");
     std::fs::create_dir_all(&out).or_else(|e| fail(e.to_string()))?;
     extract(output, &out)?;
-    verify(&snapshots, inputs, &out)
+    verify(&snapshots, inputs, &out, None)
 }

@@ -8,6 +8,10 @@ pub fn is_widescreen(size: (i64, i64)) -> bool {
     (size.0 as f64 / size.1 as f64 / (16.0 / 9.0) - 1.0).abs() <= 0.001
 }
 
+pub fn same_aspect(a: (i64, i64), b: (i64, i64)) -> bool {
+    ((a.0 as f64 / a.1 as f64) / (b.0 as f64 / b.1 as f64) - 1.0).abs() <= 0.001
+}
+
 fn xml_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     let Ok(items) = std::fs::read_dir(dir) else { return };
     for item in items.flatten() {

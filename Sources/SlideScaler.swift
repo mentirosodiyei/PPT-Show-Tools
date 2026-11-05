@@ -8,6 +8,9 @@ struct SlideScaler {
     static func isWidescreen(_ size: (Int64, Int64)) -> Bool {
         abs(Double(size.0) / Double(size.1) / (16.0 / 9.0) - 1) <= 0.001
     }
+    static func sameAspect(_ a: (Int64, Int64), _ b: (Int64, Int64)) -> Bool {
+        abs((Double(a.0) / Double(a.1)) / (Double(b.0) / Double(b.1)) - 1) <= 0.001
+    }
 
     static func normalize(package: URL, presentation: XMLDocument, from size: (Int64, Int64), to target: (Int64, Int64), fitWithoutEnlarging: Bool = false) throws {
         guard size != target else { return }

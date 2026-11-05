@@ -8,6 +8,7 @@ mod package;
 mod pdf;
 mod powerpoint;
 mod scaler;
+mod settings;
 mod textfit;
 mod tools;
 mod verifier;
@@ -56,32 +57,58 @@ fn attach_console() {
 
 fn run_cli(all: &[String]) -> i32 {
     let fit = all.iter().any(|a| a == "--fit-non169");
-    let args: Vec<&String> = all.iter().filter(|a| *a != "--fit-non169").collect();
+    let mut args: Vec<&String> = vec![];
+    let mut size: Option<&String> = None;
+    let mut i = 0;
+    while i < all.len() {
+        if all[i] == "--fit-non169" {
+            i += 1;
+            continue;
+        }
+        if all[i] == "--size" && i + 1 < all.len() {
+            size = Some(&all[i + 1]);
+            i += 2;
+            continue;
+        }
+        args.push(&all[i]);
+        i += 1;
+    }
     let paths = |from: usize| -> Vec<PathBuf> { args[from..].iter().map(PathBuf::from).collect() };
     let command = args.get(1).map(|s| s.as_str()).unwrap_or("");
     let result: Result<i32> = (|| {
-        match command {
-            "--office-prepare" | "--office-verify" if args.len() >= 4 => {
-                if command == "--office-prepare" {
-                    print_json(&office::prepare(&paths(3), &PathBuf::from(args[2]), fit)?)?;
-                    Ok(0)
-                } else {
-                    let checks = office::verify(&paths(3), &PathBuf::from(args[2]))?;
-                    print_json(&checks)?;
-                    Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
+        // --size WIDTHxHEIGHT in pixels, or "auto".
+        let fixed = match size.map(|s| s.as_str()) {
+            None | Some("auto") => None,
+            Some(s) => {
+                let parts: Vec<i64> = s.to_lowercase().split('x').filter_map(|p| p.parse().ok()).collect();
+                if parts.len() != 2 {
+                    return fail("--size must be WIDTHxHEIGHT in pixels, for example 4800x1344, or auto.");
                 }
+                Some(settings::fixed_from_pixels(parts[0], parts[1])?)
+            }
+        };
+        match command {
+            "--office-prepare" if args.len() >= 4 => {
+                print_json(&office::prepare(&paths(3), &PathBuf::from(args[2]), fit)?)?;
+                Ok(0)
+            }
+            "--office-verify" if args.len() >= 4 => {
+                let checks = office::verify(&paths(3), &PathBuf::from(args[2]))?;
+                print_json(&checks)?;
+                Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
             "--verify" if args.len() >= 5 => {
                 let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]))?;
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
-            "--pdf-to-ppt" | "--to-169" | "--extract-notes" if args.len() == 4 => {
+            "--pdf-to-ppt" | "--resize" | "--to-169" | "--extract-notes" if args.len() == 4 => {
                 let (input, output) = (PathBuf::from(args[3]), PathBuf::from(args[2]));
                 let report = match command {
                     "--pdf-to-ppt" => tools::pdf_to_ppt(&input, &output),
-                    "--to-169" => tools::widescreen(&input, &output),
-                    _ => tools::extract_notes(&input, &output),
+                    "--extract-notes" => tools::extract_notes(&input, &output),
+                    "--to-169" => tools::resize(&input, &output, None),
+                    _ => tools::resize(&input, &output, fixed),
                 };
                 match report {
                     Ok(r) => {
@@ -90,22 +117,22 @@ fn run_cli(all: &[String]) -> i32 {
                     }
                     Err(e) => {
                         let log = tools::log_failure(&input, &e.to_string());
-                        eprintln!("{e}\nRegistre: {log}");
+                        eprintln!("{e}\nLog: {log}");
                         Ok(1)
                     }
                 }
             }
             "--merge-powerpoint" if args.len() >= 5 => {
-                let report = powerpoint::merge(&paths(3), &PathBuf::from(args[2]), fit, &|m| eprintln!("{m}"))?;
-                println!("{} diapositives desades per PowerPoint. Informe: {}.report.json", report.power_point_slides, args[2]);
+                let report = powerpoint::merge(&paths(3), &PathBuf::from(args[2]), fit, fixed, &|m| eprintln!("{m}"))?;
+                println!("{} slides saved by PowerPoint. Report: {}.report.json", report.power_point_slides, args[2]);
                 Ok(if report.passed() { 0 } else { 2 })
             }
             "--merge" if args.len() >= 5 => {
-                let report = merge::merge(&paths(3), &PathBuf::from(args[2]), fit)?;
-                println!("{} diapositives. Informe: {}.report.json", report.total_slides, args[2]);
+                let report = merge::merge(&paths(3), &PathBuf::from(args[2]), fit, fixed)?;
+                println!("{} slides. Report: {}.report.json", report.total_slides, args[2]);
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }
-            _ => fail("Ús: PPTMerger --merge sortida.pptm entrada1.pptm entrada2.pptm […]\n     PPTMerger --merge-powerpoint sortida.pptx entrada1.pptx entrada2.pptx […]"),
+            _ => fail("Usage: Deckwright --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --resize [--size WxH] output.pptx input.pptx\n       Deckwright --pdf-to-ppt output.pptx input.pdf\n       Deckwright --extract-notes output.pptx input.pptx"),
         }
     })();
     match result {

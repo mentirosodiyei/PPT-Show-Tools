@@ -36,7 +36,7 @@ class NativeCheckpoint(unittest.TestCase):
       for n,data in altered.items(): z.writestr(n,data)
      r,checks=verify();self.assertEqual(r.returncode,2)
      issues=' '.join(checks[1]['issues'])
-     if mode=='wrong_source':self.assertIn('text/ordre',issues)
+     if mode=='wrong_source':self.assertIn('text/order',issues)
      else:
-      self.assertIn('animació/temporització',issues)
-      self.assertIn('transició/avançament',issues)
+      self.assertIn('animation/timing',issues)
+      self.assertIn('transition/advance',issues)

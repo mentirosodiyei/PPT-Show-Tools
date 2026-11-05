@@ -49,11 +49,11 @@ struct PowerPointSave {
               delay 0.5
             end try
           end repeat
-          if p is missing value then error "PowerPoint no ha obert la presentació en 10 minuts. Si mostra el diàleg «Concedeix accés», selecciona la carpeta de destinació (no el fitxer) i prem Concedeix accés; després torna-ho a provar."
+          if p is missing value then error "PowerPoint did not open the presentation within 10 minutes. If it shows “Grant Access”, select the destination folder (not the file), click Grant Access and try again."
           set n to count slides of p
           if n is not expected then
             close presentation sourceName saving no
-            error "PowerPoint ha obert " & n & " diapositives en lloc de " & expected & "."
+            error "PowerPoint opened " & n & " slides instead of " & expected & "."
           end if
           save p in POSIX file targetPath
           set closed to "closed"
@@ -71,7 +71,7 @@ struct PowerPointSave {
     /// Opens `source` in PowerPoint, saves it as `target` and closes it.
     /// Returns the slide count PowerPoint reported and whether it closed the file.
     static func resave(_ source: URL, to target: URL, expectedSlides: Int, timeout: TimeInterval = 1900) throws -> (slides: Int, closed: Bool) {
-        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else { try fail("No s’ha trobat Microsoft PowerPoint.") }
+        guard NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleID) != nil else { try fail("Microsoft PowerPoint was not found.") }
         let task = Process(), out = Pipe(), err = Pipe()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
         task.arguments = ["-e", script, source.path, source.lastPathComponent, target.path, target.lastPathComponent, String(expectedSlides)]
@@ -86,60 +86,60 @@ struct PowerPointSave {
         DispatchQueue.global().async(group: readers) { errors = err.fileHandleForReading.readDataToEndOfFile() }
         if finished.wait(timeout: .now() + timeout) == .timedOut {
             task.terminate()
-            try fail("PowerPoint no ha respost a temps. Pot ser que mostri un diàleg (accés a la carpeta, reparació del fitxer o inici de sessió). Revisa PowerPoint; el resultat no s’ha validat.")
+            try fail("PowerPoint did not respond in time. It may be showing a dialog (folder access, file repair or sign-in). Check PowerPoint; the result was not validated.")
         }
         readers.wait()
         let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard task.terminationStatus == 0 else {
             if message.contains("-1743") {
-                try fail("Cal autoritzar PPT Merger a controlar Microsoft PowerPoint: Configuració del Sistema → Privacitat i seguretat → Automatització.")
+                try fail("Allow Deckwright to control Microsoft PowerPoint: System Settings → Privacy & Security → Automation.")
             }
-            try fail("PowerPoint no ha pogut desar la fusió: " + (message.isEmpty ? "error desconegut" : message))
+            try fail("PowerPoint could not save the merge: " + (message.isEmpty ? "unknown error" : message))
         }
         let parts = String(decoding: output, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines).split(separator: "|")
-        guard parts.count == 2, let slides = Int(parts[0]) else { try fail("Resposta inesperada de PowerPoint.") }
+        guard parts.count == 2, let slides = Int(parts[0]) else { try fail("Unexpected reply from PowerPoint.") }
         return (slides, parts[1] == "closed")
     }
 
-    static func merge(inputs: [URL], output: URL, fitNonWidescreen: Bool = false, progress: (String) -> Void = { _ in }) throws -> PowerPointMergeReport {
+    static func merge(inputs: [URL], output: URL, fitNonWidescreen: Bool = false, fixedSize: (Int64, Int64)? = nil, progress: (String) -> Void = { _ in }) throws -> PowerPointMergeReport {
         let fm = FileManager.default
-        guard output.pathExtension.lowercased() == "pptx" else { try fail("El motor amb PowerPoint desa en PPTX. Per conservar macros, fes servir la fusió Open XML en PPTM.") }
-        guard !fm.fileExists(atPath: output.path), !fm.fileExists(atPath: output.path + ".report.json"), !fm.fileExists(atPath: output.path + ".report.txt") else { try fail("El fitxer de sortida o l’informe ja existeix. Tria un altre nom.") }
+        guard output.pathExtension.lowercased() == "pptx" else { try fail("Saving with PowerPoint produces PPTX. To keep macros, use Merge with a PPTM output.") }
+        guard !fm.fileExists(atPath: output.path), !fm.fileExists(atPath: output.path + ".report.json"), !fm.fileExists(atPath: output.path + ".report.txt") else { try fail("The output file or its report already exists. Choose another name.") }
         // PowerPoint is sandboxed: the intermediate lives in the destination folder,
         // so a single folder access grant covers both files.
-        let intermediate = output.deletingLastPathComponent().appendingPathComponent("PPT-Merger-temporal-\(UUID().uuidString.prefix(8)).pptx")
+        let intermediate = output.deletingLastPathComponent().appendingPathComponent("Deckwright-temp-\(UUID().uuidString.prefix(8)).pptx")
         defer { for suffix in ["", ".report.json", ".report.txt"] { try? fm.removeItem(atPath: intermediate.path + suffix) } }
-        progress("Fusionant i comprovant amb Open XML…")
-        let openXML = try OpenXMLMerger().merge(inputs: inputs, output: intermediate, fitNonWidescreen: fitNonWidescreen)
+        progress("Merging and checking…")
+        let openXML = try OpenXMLMerger().merge(inputs: inputs, output: intermediate, fitNonWidescreen: fitNonWidescreen, fixedSize: fixedSize)
         guard openXML.structuralValidationPassed else {
-            try fail("La fusió Open XML no supera la comprovació; no s’envia a PowerPoint.\n" + openXML.validation.flatMap { v in v.issues.prefix(5).map { v.file + ": " + $0 } }.joined(separator: "\n"))
+            try fail("The Open XML merge failed its checks; it is not sent to PowerPoint.\n" + openXML.validation.flatMap { v in v.issues.prefix(5).map { v.file + ": " + $0 } }.joined(separator: "\n"))
         }
-        progress("Obrint i desant amb PowerPoint… Si PowerPoint mostra «Concedeix accés», selecciona la carpeta (no el fitxer) o una carpeta superior, com Documents, i prem Concedeix accés. Només cal fer-ho una vegada per carpeta.")
+        progress("Opening and saving with PowerPoint… If PowerPoint shows “Grant Access”, select the folder (not the file) or a parent folder such as Documents, and click Grant Access. This is needed once per folder.")
         let saved = try resave(intermediate, to: output, expectedSlides: openXML.totalSlides)
-        progress("Comprovant el fitxer desat per PowerPoint…")
+        progress("Checking the file saved by PowerPoint…")
         // The Open XML report describes a merge made without PowerPoint; that line no longer applies.
-        var warnings = ["Fusió Open XML desada amb Microsoft PowerPoint per AppleScript."] + openXML.warnings.filter { !$0.hasPrefix("Motor Open XML directe") }
-        warnings.append("Desat amb Microsoft PowerPoint a partir de la fusió Open XML. Cada presentació conserva el seu patró i tema, com «Mantenir el format d’origen», però no s’ha executat l’ordre d’enganxar de PowerPoint.")
-        if !saved.closed { warnings.append("PowerPoint no ha pogut tancar el resultat; continua obert. Tanca’l sense desar canvis.") }
+        var warnings = ["Open XML merge saved with Microsoft PowerPoint through AppleScript."] + openXML.warnings.filter { !$0.hasPrefix("Direct Open XML engine") }
+        warnings.append("Saved with Microsoft PowerPoint from the Open XML merge. Each presentation keeps its master and theme, like “Keep Source Formatting”, but PowerPoint's paste command was not run.")
+        if !saved.closed { warnings.append("PowerPoint could not close the result; it is still open. Close it without saving changes.") }
         var issues: [String] = []
-        if saved.slides != openXML.totalSlides { issues.append("PowerPoint ha desat \(saved.slides) diapositives; se n’esperaven \(openXML.totalSlides).") }
+        if saved.slides != openXML.totalSlides { issues.append("PowerPoint saved \(saved.slides) slides; expected \(openXML.totalSlides).") }
         let checks = try OfficePipeline.verify(inputs: [intermediate], output: output).map {
-            FileValidation(file: "Fusió Open XML → desat per PowerPoint", status: issues.isEmpty ? $0.status : "import_failed_validation", checkedSlides: $0.checkedSlides, slidesWithAnimation: $0.slidesWithAnimation, binaryResourcesChecked: $0.binaryResourcesChecked, checks: $0.checks, issues: issues + $0.issues, needsReview: [
-                "PowerPoint ha obert i desat la fusió; no s’ha executat cap enganxament. No es certifica l’aspecte, les fonts, l’edició ni la reproducció.",
-                "PowerPoint reorganitza parts i identificadors en desar; es compara el contingut, no els bytes."
+            FileValidation(file: "Open XML merge → saved by PowerPoint", status: issues.isEmpty ? $0.status : "import_failed_validation", checkedSlides: $0.checkedSlides, slidesWithAnimation: $0.slidesWithAnimation, binaryResourcesChecked: $0.binaryResourcesChecked, checks: $0.checks, issues: issues + $0.issues, needsReview: [
+                "PowerPoint opened and saved the merge; nothing was pasted. Appearance, fonts, editing and playback are not certified.",
+                "PowerPoint reorganises parts and identifiers when saving; the content is compared, not the bytes."
             ])
         }
         let passed = checks.allSatisfy { $0.issues.isEmpty }
-        let report = PowerPointMergeReport(engine: "OpenXML+PowerPoint-AppleEvents-v0.6.0", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
+        let report = PowerPointMergeReport(engine: "Deckwright-OpenXML+PowerPoint-AppleEvents-v0.7.0", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(report).write(to: URL(fileURLWithPath: output.path + ".report.json"), options: .withoutOverwriting)
-            var lines = ["PPT MERGER — FUSIÓ OPEN XML DESADA AMB POWERPOINT", passed ? "Comprovació estructural superada. Revisió visual i reproducció pendents." : "IMPORTACIÓ NO CORRECTA: diferències detectades.", ""]
+            var lines = ["DECKWRIGHT — OPEN XML MERGE SAVED WITH POWERPOINT", passed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", ""]
             for (i, check) in report.validation.enumerated() {
-                lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "ESTRUCTURA: comprovacions superades; no equival a fidelitat total." : "IMPORTACIÓ NO CORRECTA"]
-                lines += check.issues.map { "ERROR: " + $0 } + check.needsReview.map { "REVISIÓ PENDENT: " + $0 } + [""]
+                lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT"]
+                lines += check.issues.map { "ERROR: " + $0 } + check.needsReview.map { "TO REVIEW: " + $0 } + [""]
             }
-            lines += ["AVISOS"] + warnings
+            lines += ["WARNINGS"] + warnings
             try Data(lines.joined(separator: "\n").utf8).write(to: URL(fileURLWithPath: output.path + ".report.txt"), options: .withoutOverwriting)
         } catch {
             try? fm.removeItem(at: URL(fileURLWithPath: output.path + ".report.json"))

@@ -172,16 +172,16 @@ fn resolve(scopes: &[Vec<(String, String)>], prefix: &str) -> Option<String> {
 }
 
 fn utf8(bytes: &[u8]) -> Result<String> {
-    String::from_utf8(bytes.to_vec()).or_else(|_| fail("XML amb codificació no admesa (cal UTF-8)."))
+    String::from_utf8(bytes.to_vec()).or_else(|_| fail("XML with an unsupported encoding (UTF-8 required)."))
 }
 
 impl Document {
     pub fn parse(data: &[u8]) -> Result<Document> {
         let data = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
         if data.starts_with(b"\xFF\xFE") || data.starts_with(b"\xFE\xFF") {
-            return fail("XML en UTF-16 no admès.");
+            return fail("UTF-16 XML is not supported.");
         }
-        let text = std::str::from_utf8(data).or_else(|_| fail("XML amb codificació no admesa (cal UTF-8)."))?;
+        let text = std::str::from_utf8(data).or_else(|_| fail("XML with an unsupported encoding (UTF-8 required)."))?;
         let mut reader = Reader::from_str(text);
         reader.config_mut().trim_text(false);
         reader.config_mut().check_end_names = true;
@@ -190,7 +190,7 @@ impl Document {
         let mut prolog = vec![];
         let mut root: Option<Element> = None;
         loop {
-            let event = reader.read_event().or_else(|e| fail(format!("XML no vàlid: {e}")))?;
+            let event = reader.read_event().or_else(|e| fail(format!("Invalid XML: {e}")))?;
             let push = |node: Node, stack: &mut Vec<Element>, prolog: &mut Vec<Node>| match stack.last_mut() {
                 Some(parent) => parent.children.push(node),
                 None => {
@@ -206,11 +206,11 @@ impl Document {
                     let mut raw = vec![];
                     let mut scope = vec![];
                     for a in e.attributes() {
-                        let a = a.or_else(|err| fail(format!("Atribut XML no vàlid: {err}")))?;
+                        let a = a.or_else(|err| fail(format!("Invalid XML attribute: {err}")))?;
                         let key = utf8(a.key.as_ref())?;
                         // Attribute-value normalization: literal tabs and line breaks are spaces.
                         let rawv: String = utf8(&a.value)?.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect();
-                        let value = quick_xml::escape::unescape(&rawv).or_else(|err| fail(format!("Entitat XML no vàlida: {err}")))?.into_owned();
+                        let value = quick_xml::escape::unescape(&rawv).or_else(|err| fail(format!("Invalid XML entity: {err}")))?.into_owned();
                         if key == "xmlns" {
                             scope.push((String::new(), value.clone()));
                         } else if let Some(p) = key.strip_prefix("xmlns:") {
@@ -245,14 +245,14 @@ impl Document {
                 }
                 Event::End(_) => {
                     scopes.pop();
-                    let element = stack.pop().ok_or_else(|| crate::Error::Fail("XML no vàlid.".into()))?;
+                    let element = stack.pop().ok_or_else(|| crate::Error::Fail("Invalid XML.".into()))?;
                     match stack.last_mut() {
                         Some(parent) => parent.children.push(Node::Elem(element)),
                         None => root = Some(element),
                     }
                 }
                 Event::Text(t) => {
-                    let s = t.unescape().or_else(|err| fail(format!("Text XML no vàlid: {err}")))?.into_owned();
+                    let s = t.unescape().or_else(|err| fail(format!("Invalid XML text: {err}")))?.into_owned();
                     push(Node::Text(s), &mut stack, &mut prolog);
                 }
                 Event::CData(t) => push(Node::CData(utf8(&t.into_inner())?), &mut stack, &mut prolog),
@@ -263,9 +263,9 @@ impl Document {
             }
         }
         if !stack.is_empty() {
-            return fail("XML incomplet.");
+            return fail("Incomplete XML.");
         }
-        let root = root.ok_or_else(|| crate::Error::Fail("XML sense element arrel.".into()))?;
+        let root = root.ok_or_else(|| crate::Error::Fail("XML without a root element.".into()))?;
         Ok(Document { root, prolog })
     }
 
@@ -367,7 +367,7 @@ pub fn part_path(root: &Path, part: &str) -> std::path::PathBuf {
     p
 }
 pub fn read_xml(root: &Path, part: &str) -> Result<Document> {
-    let data = std::fs::read(part_path(root, part)).or_else(|e| fail(format!("No es pot llegir {part}: {e}")))?;
+    let data = std::fs::read(part_path(root, part)).or_else(|e| fail(format!("Cannot read {part}: {e}")))?;
     Document::parse(&data).or_else(|e| fail(format!("{part}: {e}")))
 }
 pub fn write_xml(doc: &Document, root: &Path, part: &str) -> Result<()> {

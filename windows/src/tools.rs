@@ -1,5 +1,5 @@
 //! PDF → PowerPoint, conservative 16:9 and notes extraction.
-use crate::merge::require_valid_slide_size;
+use crate::merge::{describe_size, require_valid_slide_size};
 use crate::package::{checksum, copy_new, extension, extract, read_file, with_suffix, write_new, zip_dir, TempDir};
 use crate::verifier::{ordered_parts, resolve_part, verify, PackageSnapshot};
 use crate::xml::{read_xml, A_NS, P_NS, PKG_NS, R_NS};
@@ -32,7 +32,7 @@ fn strings(v: &[&str]) -> Vec<String> {
 
 pub fn require_new(input: &Path, output: &Path) -> Result<()> {
     if crate::package::same_file(input, output) || output.exists() || with_suffix(output, ".report.json").exists() || with_suffix(output, ".report.log").exists() {
-        return fail("La sortida o l’informe ja existeix. Tria un nom nou; l’original no es modifica.");
+        return fail("The output or its report already exists. Choose a new name; the original is not modified.");
     }
     Ok(())
 }
@@ -40,7 +40,7 @@ pub fn require_new(input: &Path, output: &Path) -> Result<()> {
 fn unpack(input: &Path, root: &Path) -> Result<()> {
     let e = extension(input);
     if e != "pptx" && e != "pptm" {
-        return fail("Selecciona un PPTX o PPTM.");
+        return fail("Choose a PPTX or PPTM file.");
     }
     extract(input, root)?;
     ordered_parts(root)?;
@@ -50,7 +50,7 @@ fn unpack(input: &Path, root: &Path) -> Result<()> {
 fn emit(report: &ToolReport) -> Result<()> {
     let output = PathBuf::from(&report.output);
     write_new(&with_suffix(&output, ".report.json"), &crate::to_json(report)?)?;
-    let warnings: Vec<String> = report.pages.iter().flat_map(|p| p.warnings.iter().map(move |w| format!("Diapositiva {}: {w}", p.source_page))).collect();
+    let warnings: Vec<String> = report.pages.iter().flat_map(|p| p.warnings.iter().map(move |w| format!("Slide {}: {w}", p.source_page))).collect();
     if !warnings.is_empty() {
         write_new(&with_suffix(&output, ".report.log"), warnings.join("\r\n").as_bytes())?;
     }
@@ -70,14 +70,14 @@ fn publish(staged: &Path, report: &ToolReport) -> Result<()> {
 }
 
 pub fn log_failure(input: &Path, error: &str) -> String {
-    let name = format!("PPT-Tools-ERROR-{}.log", uuid::Uuid::new_v4());
+    let name = format!("Deckwright-ERROR-{}.log", uuid::Uuid::new_v4());
     let log = input.parent().unwrap_or(Path::new(".")).join(&name);
     match write_new(&log, error.as_bytes()) {
         Ok(()) => log.display().to_string(),
         Err(_) => {
             let fallback = std::env::temp_dir().join(&name);
             let _ = std::fs::write(&fallback, error);
-            format!("No s’ha pogut escriure al costat de l’original. Registre alternatiu: {}", fallback.display())
+            format!("Could not write next to the original. Log written to: {}", fallback.display())
         }
     }
 }
@@ -85,16 +85,16 @@ pub fn log_failure(input: &Path, error: &str) -> String {
 pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
     require_new(input, output)?;
     if extension(output) != "pptx" {
-        return fail("La sortida del PDF ha de ser PPTX.");
+        return fail("The PDF output must be PPTX.");
     }
     let document = crate::pdf::PdfDoc::open(input)?;
     let count = document.page_count();
     if count == 0 {
-        return fail("El PDF no es pot llegir, està bloquejat o no té pàgines.");
+        return fail("The PDF cannot be read, is locked or has no pages.");
     }
     let first = document.page_size(0)?;
     if first.0 <= 0.0 || first.1 <= 0.0 {
-        return fail("Dimensions de pàgina PDF no vàlides.");
+        return fail("Invalid PDF page size.");
     }
     // Keep the first page's aspect ratio; 960 pt wide, tall pages narrowed to 4032 pt.
     let mut width = 960.0;
@@ -104,10 +104,10 @@ pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
         height = 4032.0;
     }
     if !height.is_finite() || width < 72.0 || height < 72.0 {
-        return fail("Proporció de pàgina PDF no compatible amb PowerPoint (cada costat ha de fer entre 2,54 i 142,24 cm).");
+        return fail("PDF page proportion not supported by PowerPoint (each side must be 1–56 in).");
     }
-    let root = TempDir::new("PPTTools")?;
-    let staging = TempDir::new("PPTTools")?;
+    let root = TempDir::new("Deckwright-Tools")?;
+    let staging = TempDir::new("Deckwright-Tools")?;
     let staged = staging.path().join("result.pptx");
     let mut deck = SimpleDeck::new(root.path(), width, height)?;
     let mut pages = vec![];
@@ -115,7 +115,7 @@ pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
     for i in 0..count {
         let size = document.page_size(i)?;
         if size.0 <= 0.0 || size.1 <= 0.0 {
-            return fail(format!("Pàgina PDF {}: dimensions no vàlides.", i + 1));
+            return fail(format!("PDF page {}: invalid size.", i + 1));
         }
         let png = document.render_png(i, 2560)?;
         hashes.push(checksum(&png));
@@ -123,23 +123,23 @@ pub fn pdf_to_ppt(input: &Path, output: &Path) -> Result<ToolReport> {
         pages.push(ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] });
     }
     deck.finish(&staged)?;
-    let check = TempDir::new("PPTTools")?;
+    let check = TempDir::new("Deckwright-Tools")?;
     unpack(&staged, check.path())?;
     if ordered_parts(check.path())?.len() != count {
-        return fail("El nombre de diapositives no coincideix amb les pàgines PDF.");
+        return fail("The slide count does not match the PDF pages.");
     }
     for (i, hash) in hashes.iter().enumerate() {
         if checksum(&read_file(&check.path().join("ppt").join("media").join(format!("page{}.png", i + 1)))?) != *hash {
-            return fail(format!("La imatge de la pàgina {} no s’ha conservat.", i + 1));
+            return fail(format!("The image of page {} was not preserved.", i + 1));
         }
     }
     let report = ToolReport {
-        operation: "PDF → PowerPoint (imatges)".into(),
+        operation: "PDF → PowerPoint (images)".into(),
         source: input.display().to_string(),
         output: output.display().to_string(),
         pages,
-        checks: strings(&["Una diapositiva per pàgina, en ordre", "Imatges PNG verificades per SHA-256", "Encaix proporcional sense retallar"]),
-        limitations: strings(&["Text i elements del PDF no editables; imatges de fins a 2560 píxels al costat llarg.", "La proporció de sortida és la de la primera pàgina; les altres s’encaixen amb marges.", "Les anotacions i els camps de formulari del PDF poden no aparèixer a la imatge. No es converteixen enllaços ni multimèdia del PDF."]),
+        checks: strings(&["One slide per page, in order", "PNG images verified by SHA-256", "Proportional fit without cropping"]),
+        limitations: strings(&["PDF text and elements are not editable; images up to 2560 pixels on the long side.", "The output uses the first page's proportion; other pages are fitted with margins.", "PDF annotations and form fields may not appear in the image. PDF links and media are not converted."]),
     };
     publish(&staged, &report)?;
     Ok(report)
@@ -185,16 +185,16 @@ pub fn notes_text(root: &Path, slide: &str) -> Result<String> {
 pub fn extract_notes(input: &Path, output: &Path) -> Result<ToolReport> {
     require_new(input, output)?;
     if extension(output) != "pptx" {
-        return fail("El PowerPoint de notes es desa en PPTX.");
+        return fail("The notes presentation is saved as PPTX.");
     }
-    let source = TempDir::new("PPTTools")?;
-    let root = TempDir::new("PPTTools")?;
-    let staging = TempDir::new("PPTTools")?;
+    let source = TempDir::new("Deckwright-Tools")?;
+    let root = TempDir::new("Deckwright-Tools")?;
+    let staging = TempDir::new("Deckwright-Tools")?;
     let staged = staging.path().join("result.pptx");
     unpack(input, source.path())?;
     let slides = ordered_parts(source.path())?;
     if slides.is_empty() {
-        return fail("La presentació no té diapositives.");
+        return fail("The presentation has no slides.");
     }
     let mut deck = SimpleDeck::new(root.path(), 960.0, 540.0)?;
     let mut expected = vec![];
@@ -203,21 +203,21 @@ pub fn extract_notes(input: &Path, output: &Path) -> Result<ToolReport> {
         let text = notes_text(source.path(), part)?;
         let size = textfit::fitted_size(&text);
         if !text.is_empty() && size < 1.0 {
-            return fail(format!("Les notes de la diapositiva {} són massa llargues per encabir-les en una pàgina sense perdre text.", i + 1));
+            return fail(format!("The notes of slide {} are too long to fit on one page without losing text.", i + 1));
         }
         let display = if text.is_empty() { "No Notes on this slide".to_string() } else { text.clone() };
         let display_size = if text.is_empty() { 24.0 } else { size };
         deck.add_notes(&display, display_size, text.is_empty())?;
         expected.push(display);
-        let warnings = if !text.is_empty() && size < 18.0 { vec![format!("Notes molt llargues: mida de lletra {size} pt. Revisa la llegibilitat.")] } else { vec![] };
+        let warnings = if !text.is_empty() && size < 18.0 { vec![format!("Very long notes: font size {size} pt. Check readability.")] } else { vec![] };
         pages.push(ToolPage { source_page: i + 1, font_size: Some(display_size), empty: text.is_empty(), warnings });
     }
     deck.finish(&staged)?;
-    let check = TempDir::new("PPTTools")?;
+    let check = TempDir::new("Deckwright-Tools")?;
     unpack(&staged, check.path())?;
     let actual = ordered_parts(check.path())?;
     if actual.len() != slides.len() {
-        return fail("No coincideix el nombre de diapositives de notes.");
+        return fail("The number of notes slides does not match.");
     }
     for (i, part) in actual.iter().enumerate() {
         let doc = read_xml(check.path(), part)?;
@@ -228,60 +228,78 @@ pub fn extract_notes(input: &Path, output: &Path) -> Result<ToolReport> {
             }
         }
         if paragraphs.join("\n") != expected[i] {
-            return fail(format!("Text de notes perdut o canviat a la diapositiva {}.", i + 1));
+            return fail(format!("Notes text lost or changed on slide {}.", i + 1));
         }
     }
     let report = ToolReport {
-        operation: "Notes → diapositives negres 16:9".into(),
+        operation: "Notes → black 16:9 slides".into(),
         source: input.display().to_string(),
         output: output.display().to_string(),
         pages,
-        checks: strings(&["N originals = N diapositives noves, mateix ordre", "Text complet de les notes comparat després de desar", "Fons negre, text blanc editable", "Mida calculada per pàgina amb reserva de seguretat"]),
-        limitations: strings(&["Les diapositives sense notes mostren «No Notes on this slide» centrat a 24 pt.", "Les notes s’extreuen com a text; no s’importen dibuixos ni el format original de les notes.", "PowerPoint pot variar lleugerament les mètriques de fonts; cal revisar visualment el resultat."]),
+        checks: strings(&["N originals = N new slides, same order", "Full notes text compared after saving", "Black background, editable white text", "Font size computed per page with a safety margin"]),
+        limitations: strings(&["Slides without notes show “No Notes on this slide” centred at 24 pt.", "Notes are extracted as text; drawings and original notes formatting are not imported.", "PowerPoint font metrics may vary slightly; check the result visually."]),
     };
     publish(&staged, &report)?;
     Ok(report)
 }
 
-pub fn widescreen(input: &Path, output: &Path) -> Result<ToolReport> {
+/// Resizes every slide. With no fixed size the canvas only widens to 16:9 and
+/// the content keeps its physical size; with a fixed size the content is
+/// scaled proportionally and centred on that canvas.
+pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<ToolReport> {
     require_new(input, output)?;
     if extension(input) != extension(output) {
-        return fail("Conserva l’extensió de l’original (PPTX o PPTM).");
+        return fail("Keep the original's extension (PPTX or PPTM).");
     }
-    let root = TempDir::new("PPTTools")?;
+    let root = TempDir::new("Deckwright-Tools")?;
     unpack(input, root.path())?;
     let before = PackageSnapshot::capture(root.path())?;
     let mut pres = read_xml(root.path(), "ppt/presentation.xml")?;
-    let Some((w, h)) = crate::verifier::slide_size(&pres.root) else { return fail("No es poden llegir les dimensions.") };
-    // Widen only. Never shrink the source page.
-    let unit = ((w + 15) / 16).max((h + 8) / 9);
-    let target = (unit * 16, unit * 9);
-    if scaler::is_widescreen((w, h)) {
-        return fail("La presentació ja és 16:9. No cal convertir-la.");
-    }
+    let Some((w, h)) = crate::verifier::slide_size(&pres.root) else { return fail("Cannot read the slide size.") };
+    let (target, fit) = match fixed {
+        Some(target) => {
+            if (w, h) == target {
+                return fail(format!("The presentation is already {}. Nothing to resize.", describe_size(target)));
+            }
+            (target, false)
+        }
+        None => {
+            // Widen only. Never shrink the source page.
+            if scaler::is_widescreen((w, h)) {
+                return fail("The presentation is already 16:9. Choose a slide size in Settings to resize it to another size.");
+            }
+            let unit = ((w + 15) / 16).max((h + 8) / 9);
+            ((unit * 16, unit * 9), true)
+        }
+    };
     require_valid_slide_size(target)?;
-    scaler::normalize(root.path(), &mut pres, (w, h), target, true)?;
-    let work = TempDir::new("PPTTools")?;
+    scaler::normalize(root.path(), &mut pres, (w, h), target, fit)?;
+    let work = TempDir::new("Deckwright-Tools")?;
     let archive = work.path().join("result.zip");
     zip_dir(root.path(), &archive)?;
-    let check = TempDir::new("PPTTools")?;
+    let check = TempDir::new("Deckwright-Tools")?;
     extract(&archive, check.path())?;
-    let checks = verify(std::slice::from_ref(&before), &[input.to_path_buf()], check.path())?;
+    let checks = verify(std::slice::from_ref(&before), &[input.to_path_buf()], check.path(), Some(&[fit]))?;
     let issues: Vec<String> = checks.iter().flat_map(|c| c.issues.clone()).collect();
     if !issues.is_empty() {
-        return fail(format!("La conversió no supera la comprovació: {}", issues.join("; ")));
+        return fail(format!("The conversion failed its checks: {}", issues.join("; ")));
     }
     let out = read_xml(check.path(), "ppt/presentation.xml")?;
     if crate::verifier::slide_size(&out.root) != Some(target) {
-        return fail("No s’ha conservat la mida 16:9 prevista.");
+        return fail("The expected slide size was not kept.");
     }
+    let canvas = if fit {
+        format!("Canvas {}; content centred without enlarging, stretching or cropping", describe_size(target))
+    } else {
+        format!("Canvas {}; content scaled proportionally and centred, without stretching or cropping", describe_size(target))
+    };
     let report = ToolReport {
-        operation: "PowerPoint → 16:9 (encaix conservador)".into(),
+        operation: format!("Resize slides: {} → {}", describe_size((w, h)), describe_size(target)),
         source: input.display().to_string(),
         output: output.display().to_string(),
         pages: (0..before.slides.len()).map(|i| ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] }).collect(),
-        checks: strings(&["Llenç 16:9, contingut centrat sense ampliar, estirar ni retallar", "Ordre, text, notes, animacions, transicions i recursos verificats després de desar"]),
-        limitations: strings(&["Es mantenen marges laterals quan l’original és 4:3; no es redissenya la composició per omplir-los.", "No es pot certificar automàticament tota la reproducció ni l’aspecte d’OLE, SmartArt, fonts i efectes avançats. Revisa el resultat a PowerPoint."]),
+        checks: vec![canvas, "Order, text, notes, animations, transitions and resources verified after saving".into()],
+        limitations: strings(&["Margins remain when the proportion changes (for example 4:3 to 16:9); the layout is not redesigned to fill them.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
     };
     publish(&archive, &report)?;
     Ok(report)
@@ -318,7 +336,7 @@ impl SimpleDeck {
         Ok(SimpleDeck { root: root.to_path_buf(), width, height, count: 0, image_pages: Default::default() })
     }
     fn put(&self, name: &str, text: &str) -> Result<()> {
-        std::fs::write(crate::xml::part_path(&self.root, name), text).or_else(|e| fail(format!("No es pot escriure {name}: {e}")))
+        std::fs::write(crate::xml::part_path(&self.root, name), text).or_else(|e| fail(format!("Cannot write {name}: {e}")))
     }
     fn add(&mut self, body: &str, black: bool) -> Result<()> {
         self.count += 1;
@@ -336,18 +354,18 @@ impl SimpleDeck {
         std::fs::write(crate::xml::part_path(&self.root, &format!("ppt/media/page{n}.png")), png).or_else(|e| fail(e.to_string()))?;
         let factor = (self.width / size.0).min(self.height / size.1);
         let (w, h) = (size.0 * factor, size.1 * factor);
-        let body = format!("<p:pic><p:nvPicPr><p:cNvPr id=\"2\" name=\"Pàgina {n}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed=\"image\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>", emu((self.width - w) / 2.0), emu((self.height - h) / 2.0), emu(w), emu(h));
+        let body = format!("<p:pic><p:nvPicPr><p:cNvPr id=\"2\" name=\"Page {n}\"/><p:cNvPicPr><a:picLocks noChangeAspect=\"1\"/></p:cNvPicPr><p:nvPr/></p:nvPicPr><p:blipFill><a:blip r:embed=\"image\"/><a:stretch><a:fillRect/></a:stretch></p:blipFill><p:spPr><a:xfrm><a:off x=\"{}\" y=\"{}\"/><a:ext cx=\"{}\" cy=\"{}\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom></p:spPr></p:pic>", emu((self.width - w) / 2.0), emu((self.height - h) / 2.0), emu(w), emu(h));
         self.add(&body, false)
     }
     pub fn add_notes(&mut self, text: &str, font_size: f64, centered: bool) -> Result<()> {
         let sz = ((font_size * 100.0).round() as i64).max(100);
-        let paragraphs: String = text.split('\n').map(|line| format!("<a:p><a:pPr algn=\"{}\"/><a:r><a:rPr lang=\"ca-ES\" sz=\"{sz}\"><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:latin typeface=\"Arial\"/><a:ea typeface=\"Arial\"/><a:cs typeface=\"Arial\"/></a:rPr><a:t xml:space=\"preserve\">{}</a:t></a:r><a:endParaRPr sz=\"{sz}\"/></a:p>", if centered { "ctr" } else { "l" }, esc(line))).collect();
+        let paragraphs: String = text.split('\n').map(|line| format!("<a:p><a:pPr algn=\"{}\"/><a:r><a:rPr lang=\"en-US\" sz=\"{sz}\"><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:latin typeface=\"Arial\"/><a:ea typeface=\"Arial\"/><a:cs typeface=\"Arial\"/></a:rPr><a:t xml:space=\"preserve\">{}</a:t></a:r><a:endParaRPr sz=\"{sz}\"/></a:p>", if centered { "ctr" } else { "l" }, esc(line))).collect();
         let body = if text.is_empty() { String::new() } else { format!("<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"457200\" y=\"457200\"/><a:ext cx=\"11277600\" cy=\"5943600\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap=\"square\" lIns=\"0\" rIns=\"0\" tIns=\"0\" bIns=\"0\" anchor=\"ctr\"><a:normAutofit/></a:bodyPr><a:lstStyle/>{paragraphs}</p:txBody></p:sp>") };
         self.add(&body, true)
     }
     pub fn finish(&self, output: &Path) -> Result<()> {
         if self.count == 0 {
-            return fail("No hi ha cap diapositiva per desar.");
+            return fail("There are no slides to save.");
         }
         let a = A_NS;
         self.put("_rels/.rels", &rels(&[("office", "officeDocument", "ppt/presentation.xml".into())]))?;

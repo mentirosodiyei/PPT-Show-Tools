@@ -57,12 +57,12 @@ fn version_info(version: &str) -> Vec<u8> {
         fixed.extend(x.to_le_bytes());
     }
     let strings: Vec<Vec<u8>> = [
-        ("CompanyName", "PPT Merger"),
-        ("FileDescription", "PPT Merger"),
+        ("CompanyName", "Deckwright"),
+        ("FileDescription", "Deckwright"),
         ("FileVersion", version),
-        ("InternalName", "PPTMerger"),
-        ("OriginalFilename", "PPTMerger.exe"),
-        ("ProductName", "PPT Merger"),
+        ("InternalName", "Deckwright"),
+        ("OriginalFilename", "Deckwright.exe"),
+        ("ProductName", "Deckwright"),
         ("ProductVersion", version),
     ]
     .iter()
@@ -71,10 +71,10 @@ fn version_info(version: &str) -> Vec<u8> {
         node(k, &value, (value.len() / 2) as u16, true, &[])
     })
     .collect();
-    // Catalan (0x0403), Unicode code page (1200).
-    let table = node("040304B0", &[], 0, true, &strings);
+    // US English (0x0409), Unicode code page (1200).
+    let table = node("040904B0", &[], 0, true, &strings);
     let string_info = node("StringFileInfo", &[], 0, true, &[table]);
-    let translation = node("Translation", &0x04B0_0403u32.to_le_bytes(), 4, false, &[]);
+    let translation = node("Translation", &0x04B0_0409u32.to_le_bytes(), 4, false, &[]);
     let var_info = node("VarFileInfo", &[], 0, true, &[translation]);
     node("VS_VERSION_INFO", &fixed, 52, false, &[string_info, var_info])
 }
@@ -103,7 +103,7 @@ fn main() {
     }
     resource(&mut res, 14, 1, &group, 0x1030, 0x0409); // RT_GROUP_ICON
     resource(&mut res, 16, 1, &version_info(&env::var("CARGO_PKG_VERSION").unwrap()), 0x0030, 0x0409); // RT_VERSION
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("pptmerger.res");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("deckwright.res");
     fs::write(&out, res).unwrap();
     println!("cargo:rustc-link-arg-bins={}", out.display());
 }

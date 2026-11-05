@@ -16,7 +16,7 @@ mod imp {
         doc: PdfDocument,
     }
     fn unreadable<T>(_: T) -> crate::Error {
-        crate::Error::Fail("El PDF no es pot llegir, està bloquejat o no té pàgines.".into())
+        crate::Error::Fail("The PDF cannot be read, is locked or has no pages.".into())
     }
     impl PdfDoc {
         pub fn open(path: &Path) -> Result<PdfDoc> {
@@ -33,13 +33,13 @@ mod imp {
         }
         /// Page size in points, after rotation.
         pub fn page_size(&self, index: usize) -> Result<(f64, f64)> {
-            let page = self.doc.GetPage(index as u32).or_else(|_| fail(format!("No es pot llegir la pàgina PDF {}.", index + 1)))?;
-            let size = page.Size().or_else(|_| fail(format!("No es pot llegir la pàgina PDF {}.", index + 1)))?;
+            let page = self.doc.GetPage(index as u32).or_else(|_| fail(format!("Cannot read PDF page {}.", index + 1)))?;
+            let size = page.Size().or_else(|_| fail(format!("Cannot read PDF page {}.", index + 1)))?;
             // Windows reports DIPs (1/96 inch).
             Ok((size.Width as f64 * 72.0 / 96.0, size.Height as f64 * 72.0 / 96.0))
         }
         pub fn render_png(&self, index: usize, long_side: u32) -> Result<Vec<u8>> {
-            let err = |_| crate::Error::Fail(format!("No es pot generar la imatge de la pàgina {}.", index + 1));
+            let err = |_| crate::Error::Fail(format!("Cannot render the image of page {}.", index + 1));
             let (w, h) = self.page_size(index)?;
             let scale = long_side as f64 / w.max(h);
             let page = self.doc.GetPage(index as u32).map_err(err)?;
@@ -54,7 +54,7 @@ mod imp {
             let mut data = vec![0u8; size as usize];
             reader.ReadBytes(&mut data).map_err(err)?;
             if !data.starts_with(b"\x89PNG") {
-                return fail(format!("No es pot generar la imatge de la pàgina {}.", index + 1));
+                return fail(format!("Cannot render the image of page {}.", index + 1));
             }
             Ok(data)
         }
@@ -68,16 +68,16 @@ mod imp {
     pub struct PdfDoc;
     impl PdfDoc {
         pub fn open(_: &Path) -> Result<PdfDoc> {
-            fail("La conversió de PDF d’aquesta versió fa servir el renderitzador de Windows. Al Mac, fes servir PPT Merger per a macOS.")
+            fail("This build converts PDFs with the Windows renderer. On a Mac, use Deckwright for macOS.")
         }
         pub fn page_count(&self) -> usize {
             0
         }
         pub fn page_size(&self, _: usize) -> Result<(f64, f64)> {
-            fail("No disponible")
+            fail("Not available")
         }
         pub fn render_png(&self, _: usize, _: u32) -> Result<Vec<u8>> {
-            fail("No disponible")
+            fail("Not available")
         }
     }
 }

@@ -2,8 +2,8 @@
 import tempfile,zipfile,subprocess,unittest
 from pathlib import Path
 import os
-# PPTMERGER_BIN runs the same suite against another build, such as the Windows engine.
-BIN=Path(os.environ.get('PPTMERGER_BIN') or Path(__file__).resolve().parents[1]/'dist/PPT Merger.app/Contents/MacOS/PPTMerger')
+# DECKWRIGHT_BIN runs the same suite against another build, such as the Windows engine.
+BIN=Path(os.environ.get('DECKWRIGHT_BIN') or os.environ.get('PPTMERGER_BIN') or Path(__file__).resolve().parents[1]/'dist/Deckwright.app/Contents/MacOS/Deckwright')
 def fixture(path,width=12192000,height=6858000):
  with zipfile.ZipFile(path,'w') as z:
   z.writestr('ppt/presentation.xml',f'<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="{width}" cy="{height}"/></p:presentation>')
@@ -18,10 +18,10 @@ class Guards(unittest.TestCase):
    before=(a.read_bytes(),b.read_bytes());r=subprocess.run([str(BIN),'--merge',str(o),str(a),str(b)],capture_output=True)
    self.assertNotEqual(r.returncode,0);self.assertFalse(o.exists());self.assertEqual(before,(a.read_bytes(),b.read_bytes()))
    message=r.stderr.decode()
-   self.assertIn('no tenen proporció 16:9',message)
-   self.assertIn('Fitxer 2: «b.pptx»',message)
-   self.assertNotIn('Fitxer 1:',message)
-   self.assertIn('25,40 × 19,05 cm',message)
+   self.assertIn('are not 16:9',message)
+   self.assertIn('File 2: “b.pptx”',message)
+   self.assertNotIn('File 1:',message)
+   self.assertIn('960 × 720 px (25.40 × 19.05 cm)',message)
  def test_alt_text_whitespace_survives_normalization(self):
   import xml.etree.ElementTree as E
   with tempfile.TemporaryDirectory() as d:
@@ -172,7 +172,7 @@ class Guards(unittest.TestCase):
     r=subprocess.run([str(BIN),'--verify',str(bad),str(a),str(b)],capture_output=True)
     self.assertEqual(r.returncode,2,r.stderr.decode());checks=json.loads(r.stdout)
     self.assertEqual(checks[1]['status'],'import_failed_validation')
-    self.assertTrue(any('animació/temporització' in issue and 'diapositiva 1' in issue for issue in checks[1]['issues']))
+    self.assertTrue(any('animation/timing' in issue and 'slide 1' in issue for issue in checks[1]['issues']))
  def test_office_preparation_and_semantic_verifier(self):
   import json
   with tempfile.TemporaryDirectory() as d:

@@ -1,12 +1,12 @@
 [package]
-name = "ppt-merger"
-version = "0.6.0"
+name = "deckwright"
+version = "0.7.0"
 edition = "2021"
-description = "PPT Merger per a Windows: fusió Open XML, PDF a PowerPoint, 16:9 i notes"
+description = "Deckwright for Windows: merge presentations, PDF to PowerPoint, resize slides and extract notes"
 build = "build.rs"
 
 [[bin]]
-name = "PPTMerger"
+name = "Deckwright"
 path = "src/main.rs"
 
 [dependencies]

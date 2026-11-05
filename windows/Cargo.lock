@@ -754,6 +754,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f27ae1dd37df86211c42e150270f82743308803d90a6f6e6651cd730d5e1732f"
 
 [[package]]
+name = "deckwright"
+version = "0.7.0"
+dependencies = [
+ "eframe",
+ "image",
+ "quick-xml 0.37.5",
+ "regex",
+ "rfd",
+ "serde",
+ "serde_json",
+ "sha2",
+ "ttf-parser",
+ "uuid",
+ "windows",
+ "zip",
+]
+
+[[package]]
 name = "derive_arbitrary"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2312,24 +2330,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d83eb9bc6d8e5cf568e7a1101d60ee05e81ed50ea106026f3d18deeb046d7661"
 dependencies = [
  "zerovec",
-]
-
-[[package]]
-name = "ppt-merger"
-version = "0.6.0"
-dependencies = [
- "eframe",
- "image",
- "quick-xml 0.37.5",
- "regex",
- "rfd",
- "serde",
- "serde_json",
- "sha2",
- "ttf-parser",
- "uuid",
- "windows",
- "zip",
 ]
 
 [[package]]

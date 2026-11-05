@@ -16,13 +16,23 @@ pub fn require_valid_slide_size(size: (i64, i64)) -> Result<()> {
     if ok(size.0) && ok(size.1) {
         Ok(())
     } else {
-        fail(format!("La mida de diapositiva resultant ({} × {} EMU) supera els límits de PowerPoint (2,54–142,24 cm per costat).", size.0, size.1))
+        fail(format!("The resulting slide size ({} × {} EMU) is outside PowerPoint's limits (1–56 in per side).", size.0, size.1))
     }
 }
 
-/// Open XML stores sizes in EMU: 360,000 EMU per centimetre.
-pub fn dimensions(size: (i64, i64)) -> String {
-    format!("{:.2} × {:.2} cm", size.0 as f64 / 360000.0, size.1 as f64 / 360000.0).replace('.', ",")
+/// PowerPoint measures pixels at 96 per inch: 1 px = 9525 EMU.
+pub const EMU_PER_PIXEL: i64 = 9525;
+
+/// "1280 × 720 px (33.87 × 19.05 cm)"; Open XML stores 360,000 EMU per centimetre.
+pub fn describe_size(size: (i64, i64)) -> String {
+    format!("{:.0} × {:.0} px ({:.2} × {:.2} cm)", size.0 as f64 / EMU_PER_PIXEL as f64, size.1 as f64 / EMU_PER_PIXEL as f64, size.0 as f64 / 360000.0, size.1 as f64 / 360000.0)
+}
+
+/// Output canvas and, per source, whether it may only shrink (fit with margins)
+/// or is scaled proportionally to the canvas.
+pub struct SlidePlan {
+    pub target: (i64, i64),
+    pub fit_without_enlarging: Vec<bool>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug)]
@@ -44,6 +54,29 @@ impl MergeReport {
     }
 }
 
+/// `fixed` is the size forced in Settings; None means automatic: a size shared by
+/// every source (or their common proportion, at the largest size) is kept;
+/// mixed proportions fall back to 16:9, fitting the others only when allowed.
+pub fn plan_slide_size(sizes: &[(i64, i64)], fixed: Option<(i64, i64)>, fit_non_matching: bool, names: &[String]) -> Result<SlidePlan> {
+    let plan = if let Some(target) = fixed {
+        SlidePlan { target, fit_without_enlarging: vec![false; sizes.len()] }
+    } else if !sizes.is_empty() && sizes.iter().all(|s| scaler::same_aspect(*s, sizes[0])) {
+        let largest = *sizes.iter().max_by_key(|s| s.0 as i128 * s.1 as i128).unwrap();
+        SlidePlan { target: largest, fit_without_enlarging: vec![false; sizes.len()] }
+    } else {
+        let invalid: Vec<usize> = (0..sizes.len()).filter(|&i| !scaler::is_widescreen(sizes[i])).collect();
+        if !invalid.is_empty() && !fit_non_matching {
+            let details: Vec<String> = invalid.iter().map(|&i| format!("• File {}: “{}” — {}.", i + 1, names[i], describe_size(sizes[i]))).collect();
+            return Err(Error::FormatChoice(format!("These files are not 16:9:\n\n{}\n\nYou can fit them centred without enlarging or cropping, choose an output size in Settings, or stop and change them yourself. The originals are not modified.", details.join("\n"))));
+        }
+        // Smallest exact 16:9 canvas at least as wide AND as high as every source.
+        let unit = sizes.iter().map(|s| ((s.0 + 15) / 16).max((s.1 + 8) / 9)).max().unwrap_or(0);
+        SlidePlan { target: (unit * 16, unit * 9), fit_without_enlarging: sizes.iter().map(|s| !scaler::is_widescreen(*s)).collect() }
+    };
+    require_valid_slide_size(plan.target)?;
+    Ok(plan)
+}
+
 // Sequence order of children in CT_Presentation (ISO/IEC 29500-1 §19.2.1.26)
 const PRESENTATION_CHILD_ORDER: [&str; 15] = ["sldMasterIdLst", "notesMasterIdLst", "handoutMasterIdLst", "sldIdLst", "sldSz", "notesSz", "smartTags", "embeddedFontLst", "custShowLst", "photoAlbum", "custDataLst", "kinsoku", "defaultTextStyle", "modifyVerifier", "extLst"];
 
@@ -61,7 +94,7 @@ fn insert_in_presentation_order(root: &mut Element, node: Element) {
 }
 
 fn mkdir(p: &Path) -> Result<()> {
-    std::fs::create_dir_all(p).or_else(|e| fail(format!("No es pot crear {}: {e}", p.display())))
+    std::fs::create_dir_all(p).or_else(|e| fail(format!("Cannot create {}: {e}", p.display())))
 }
 
 fn part_of(target: &str) -> String {
@@ -72,24 +105,24 @@ fn part_of(target: &str) -> String {
     }
 }
 
-pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Result<MergeReport> {
+pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed: Option<(i64, i64)>) -> Result<MergeReport> {
     if inputs.len() < 2 {
-        return fail("Afegeix dues presentacions com a mínim.");
+        return fail("Add at least two presentations.");
     }
     let out_ext = extension(output);
     if out_ext != "pptx" && out_ext != "pptm" {
-        return fail("La sortida ha de ser PPTX o PPTM.");
+        return fail("The output must be PPTX or PPTM.");
     }
     if output.exists() || with_suffix(output, ".report.json").exists() || with_suffix(output, ".report.txt").exists() {
-        return fail("El fitxer de sortida o l’informe ja existeix. Tria un altre nom.");
+        return fail("The output file or its report already exists. Choose another name.");
     }
     for input in inputs {
         let e = extension(input);
         if (e != "pptx" && e != "pptm") || crate::package::same_file(input, output) {
-            return fail("Entrada no vàlida.");
+            return fail("Invalid input.");
         }
     }
-    let temp = TempDir::new("PPTMerger")?;
+    let temp = TempDir::new("Deckwright")?;
     let mut roots = vec![];
     for (i, input) in inputs.iter().enumerate() {
         let dir = temp.path().join(format!("input{i}"));
@@ -105,41 +138,35 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
     }
     let mut docs = roots.iter().map(|r| read_xml(r, "ppt/presentation.xml")).collect::<Result<Vec<_>>>()?;
     if !docs.iter().all(|d| d.root.ns == P_NS) {
-        return fail("Només es permet Open XML Transitional de PowerPoint.");
+        return fail("Only PowerPoint Open XML (Transitional) is supported.");
     }
     let mut sizes = vec![];
     for (i, d) in docs.iter().enumerate() {
         match slide_size(&d.root) {
             Some(s) => sizes.push(s),
-            None => return fail(format!("No es poden llegir les dimensions del fitxer {}: «{}».", i + 1, file_name(&inputs[i]))),
+            None => return fail(format!("Cannot read the slide size of file {}: “{}”.", i + 1, file_name(&inputs[i]))),
         }
     }
     let originals = roots.iter().map(|r| PackageSnapshot::capture(r)).collect::<Result<Vec<_>>>()?;
-    let invalid: Vec<usize> = (0..sizes.len()).filter(|&i| !scaler::is_widescreen(sizes[i])).collect();
-    if !invalid.is_empty() && !fit_non_widescreen {
-        let details: Vec<String> = invalid.iter().map(|&i| format!("• Fitxer {}: «{}» — {}.", i + 1, file_name(&inputs[i]), dimensions(sizes[i]))).collect();
-        return Err(Error::FormatChoice(format!("Aquests fitxers no tenen proporció 16:9:\n\n{}\n\nPots encaixar-los centrats sense ampliar-los ni retallar-los, o aturar la fusió per modificar-los manualment. Els originals no es modificaran.", details.join("\n"))));
-    }
-    // Smallest exact 16:9 canvas at least as wide AND as high as every source.
-    let unit = sizes.iter().map(|s| ((s.0 + 15) / 16).max((s.1 + 8) / 9)).max().unwrap_or(0);
-    let target = (unit * 16, unit * 9);
-    require_valid_slide_size(target)?;
+    let names: Vec<String> = inputs.iter().map(|p| file_name(p)).collect();
+    let plan = plan_slide_size(&sizes, fixed, fit_non_widescreen, &names)?;
+    let target = plan.target;
     let mut scaling_warnings = vec![];
     for i in 0..sizes.len() {
         if sizes[i] != target {
-            let fit = !scaler::is_widescreen(sizes[i]);
+            let fit = plan.fit_without_enlarging[i];
             scaler::normalize(&roots[i], &mut docs[i], sizes[i], target, fit)?;
-            scaling_warnings.push(format!("{}: {} → {} (16:9); {}.", file_name(&inputs[i]), dimensions(sizes[i]), dimensions(target), if fit { "centrat sense ampliar ni retallar" } else { "escala proporcional" }));
+            scaling_warnings.push(format!("{}: {} → {}; {}.", names[i], describe_size(sizes[i]), describe_size(target), if fit { "centred without enlarging or cropping" } else { "scaled proportionally and centred" }));
         }
     }
     let counts: Vec<usize> = docs.iter().map(|d| d.root.child("sldIdLst").map(|l| l.named("sldId").count()).unwrap_or(0)).collect();
     if !counts.iter().all(|c| *c > 0) {
-        return fail("Hi ha una presentació sense diapositives.");
+        return fail("One of the presentations has no slides.");
     }
     let base = roots[0].clone();
     let mut rels = read_xml(&base, "ppt/_rels/presentation.xml.rels")?;
     let mut ct = read_xml(&base, "[Content_Types].xml")?;
-    let mut warnings = vec!["Motor Open XML directe (sense obrir PowerPoint).".to_string(), "Cal revisar reproducció, edició, notes, tipus de lletra, enllaços externs i objectes OLE a PowerPoint.".to_string()];
+    let mut warnings = vec!["Direct Open XML engine (PowerPoint is not opened).".to_string(), "Check playback, editing, notes, fonts, external links and OLE objects in PowerPoint.".to_string()];
     warnings.extend(scaling_warnings);
     let mut next_slide: u64 = docs[0].root.child("sldIdLst").and_then(|l| l.named("sldId").filter_map(|e| e.attr("id").parse::<u64>().ok()).max()).unwrap_or(255) + 1;
     let mut next_master: u64 = 2147483648;
@@ -187,7 +214,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
         let t = e.attr("Target");
         if t.starts_with('/') { t.to_string() } else { format!("/ppt/{t}") }
     });
-    warnings.push("Totes les notes utilitzen el primer patró de notes disponible. El contingut per diapositiva es conserva; el format heretat de les notes pot canviar.".into());
+    warnings.push("All notes use the first notes master available. Each slide's notes content is kept; inherited notes formatting may change.".into());
     let (base_doc, other_docs) = docs.split_at_mut(1);
     let pres = &mut base_doc[0];
     let p_prefix = pres.prefix_for(P_NS, "p");
@@ -248,7 +275,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
             let kind = entry.attr("ContentType").to_string();
             if let Some(existing) = defaults.get(&ext) {
                 if *existing != kind {
-                    return fail(format!("Tipus de contingut contradictoris per a l’extensió .{ext} a «{}».", file_name(&inputs[i])));
+                    return fail(format!("Conflicting content types for extension .{ext} in “{}”.", file_name(&inputs[i])));
                 }
             }
             defaults.insert(ext, kind);
@@ -261,7 +288,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
             }
             let name = part.rsplit('/').next().unwrap_or("");
             let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
-            let Some(kind) = overrides.get(&part).or_else(|| defaults.get(&ext)) else { return fail(format!("Falta ContentType: {part}")) };
+            let Some(kind) = overrides.get(&part).or_else(|| defaults.get(&ext)) else { return fail(format!("Missing content type: {part}")) };
             let mut e = Element::new(&format!("{ct_prefix}Override"), CT_NS);
             e.set_attr("PartName", &format!("/{prefix}{part}"));
             e.set_attr("ContentType", kind);
@@ -278,7 +305,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
             }
             let mut imported = vec![];
             for e in source_list.named(child_name) {
-                let Some(rel) = by_id.get(e.rid()) else { return fail("Relació de presentació absent") };
+                let Some(rel) = by_id.get(e.rid()) else { return fail("Missing presentation relationship") };
                 let new_rid = add_rel(&mut rels, rel.attr("Type"), &format!("/{prefix}{}", part_of(rel.attr("Target"))));
                 let mut node = e.clone();
                 node.set_attr_ns(R_NS, "id", &r_prefix, &new_rid);
@@ -311,7 +338,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
                         continue;
                     }
                     let rel = by_id.get(&id).filter(|r| r.attr("Type").ends_with("/font") && r.attr("TargetMode") != "External");
-                    let Some(rel) = rel else { return fail(format!("Relació de font incrustada absent o no vàlida a «{}».", file_name(&inputs[i]))) };
+                    let Some(rel) = rel else { return fail(format!("Missing or invalid embedded font relationship in “{}”.", file_name(&inputs[i]))) };
                     let new_id = add_rel(&mut rels, rel.attr("Type"), &format!("/{prefix}{}", part_of(rel.attr("Target"))));
                     style.set_attr_ns(R_NS, "id", &r_prefix, &new_id);
                 }
@@ -321,15 +348,15 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
             for f in fonts {
                 target.add(f);
             }
-            warnings.push(format!("{}: fonts incrustades registrades al resultat. Revisa substitucions, permisos d’ús i possibles variants diferents amb el mateix nom.", file_name(&inputs[i])));
+            warnings.push(format!("{}: embedded fonts registered in the result. Check substitutions, usage rights and different variants with the same name.", file_name(&inputs[i])));
         }
         if source.join("ppt").join("vbaProject.bin").exists() {
-            warnings.push(format!("{}: VBA conservat com a recurs inactiu; no integrat al projecte VBA de sortida.", file_name(&inputs[i])));
+            warnings.push(format!("{}: VBA kept as an inactive resource; not merged into the output VBA project.", file_name(&inputs[i])));
         }
     }
     let has_macros = base.join("ppt").join("vbaProject.bin").exists();
     if out_ext == "pptx" && has_macros {
-        return fail("El primer fitxer conté VBA: desa en PPTM per conservar-lo.");
+        return fail("The first file contains VBA: save as PPTM to keep it.");
     }
     for e in ct.root.elems_mut().filter(|e| e.local() == "Override" && e.attr("PartName") == "/ppt/presentation.xml") {
         e.set_attr("ContentType", if out_ext == "pptm" { "application/vnd.ms-powerpoint.presentation.macroEnabled.main+xml" } else { "application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml" });
@@ -348,7 +375,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
     }
     // ST_SlideId allows 256…2147483647.
     if next_slide > 2147483648 {
-        return fail("Hi ha massa identificadors de diapositiva per crear una presentació vàlida.");
+        return fail("Too many slide identifiers to create a valid presentation.");
     }
     write_xml(pres, &base, "ppt/presentation.xml")?;
     write_xml(&rels, &base, "ppt/_rels/presentation.xml.rels")?;
@@ -358,10 +385,10 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
     let verification = temp.path().join("verify");
     mkdir(&verification)?;
     extract(&archive, &verification)?;
-    let validation = verify(&originals, inputs, &verification)?;
+    let validation = verify(&originals, inputs, &verification, Some(&plan.fit_without_enlarging))?;
     let passed = validation.iter().all(|v| v.issues.is_empty());
     let report = MergeReport {
-        engine: "OpenXML-namespaced-v0.6.0-windows".into(),
+        engine: "Deckwright-OpenXML-v0.7.0-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         total_slides: counts.iter().sum(),
         slide_counts: counts,
@@ -374,17 +401,17 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool) -> Res
     copy_new(&archive, output)?;
     let written = (|| -> Result<()> {
         write_new(&with_suffix(output, ".report.json"), &crate::to_json(&report)?)?;
-        let mut lines = vec!["PPT MERGER — COMPROVACIONS PER FITXER".to_string(), if passed { "Comprovació estructural superada. Revisió visual i reproducció pendents." } else { "IMPORTACIÓ NO CORRECTA: diferències detectades." }.into(), String::new(), format!("Mida de sortida: {} · 16:9", dimensions(target)), String::new()];
+        let mut lines = vec!["DECKWRIGHT — CHECKS PER FILE".to_string(), if passed { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new(), format!("Output size: {}", describe_size(target)), String::new()];
         for (i, check) in report.validation.iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
-            lines.push(if check.issues.is_empty() { "ESTRUCTURA: comprovacions superades; no equival a fidelitat total." } else { "IMPORTACIÓ NO CORRECTA" }.into());
-            lines.push(format!("{} diapositives; {} amb animació; {} recursos comprovats.", check.checked_slides, check.slides_with_animation, check.binary_resources_checked));
-            lines.extend(check.checks.iter().map(|c| format!("Comprovat: {c}")));
+            lines.push(if check.issues.is_empty() { "STRUCTURE: checks passed; this is not full fidelity." } else { "IMPORT NOT CORRECT" }.into());
+            lines.push(format!("{} slides; {} with animation; {} resources checked.", check.checked_slides, check.slides_with_animation, check.binary_resources_checked));
+            lines.extend(check.checks.iter().map(|c| format!("Checked: {c}")));
             lines.extend(check.issues.iter().map(|c| format!("ERROR: {c}")));
-            lines.extend(check.needs_review.iter().map(|c| format!("REVISIÓ PENDENT: {c}")));
+            lines.extend(check.needs_review.iter().map(|c| format!("TO REVIEW: {c}")));
             lines.push(String::new());
         }
-        lines.push("AVISOS".into());
+        lines.push("WARNINGS".into());
         lines.extend(warnings);
         write_new(&with_suffix(output, ".report.txt"), lines.join("\r\n").as_bytes())
     })();

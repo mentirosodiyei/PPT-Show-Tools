@@ -40,7 +40,7 @@ try {
   # ReadOnly = msoTrue, Untitled = msoFalse, WithWindow = msoFalse
   $p = $app.Presentations.Open($Source, -1, 0, 0)
   $n = $p.Slides.Count
-  if ($n -ne $Expected) { throw "PowerPoint ha obert $n diapositives en lloc de $Expected." }
+  if ($n -ne $Expected) { throw "PowerPoint opened $n slides instead of $Expected." }
   # 24 = ppSaveAsOpenXMLPresentation
   $p.SaveAs($Target, 24)
   Write-Output "$n|closed"
@@ -66,7 +66,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)> {
     use std::io::Read;
-    let temp = TempDir::new("PPTPowerPoint")?;
+    let temp = TempDir::new("Deckwright-PowerPointScript")?;
     let script = temp.path().join("desa.ps1");
     // BOM: Windows PowerShell 5 reads scripts without it as ANSI.
     let mut bytes = b"\xEF\xBB\xBF".to_vec();
@@ -85,7 +85,7 @@ fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)
         .stderr(std::process::Stdio::piped())
         .creation_flags(0x0800_0000) // CREATE_NO_WINDOW
         .spawn()
-        .or_else(|e| fail(format!("No es pot iniciar PowerShell: {e}")))?;
+        .or_else(|e| fail(format!("Cannot start PowerShell: {e}")))?;
     let mut out = child.stdout.take().unwrap();
     let mut err = child.stderr.take().unwrap();
     let out_reader = std::thread::spawn(move || {
@@ -105,7 +105,7 @@ fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)
         }
         if std::time::Instant::now() > deadline {
             let _ = child.kill();
-            return fail("PowerPoint no ha respost a temps. Pot ser que mostri un diàleg (reparació del fitxer, inici de sessió o llicència). Revisa PowerPoint; el resultat no s’ha validat.");
+            return fail("PowerPoint did not respond in time. It may be showing a dialog (file repair, sign-in or licence). Check PowerPoint; the result was not validated.");
         }
         std::thread::sleep(std::time::Duration::from_millis(250));
     };
@@ -113,67 +113,67 @@ fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)
     let stderr = String::from_utf8_lossy(&err_reader.join().unwrap_or_default()).trim().to_string();
     if !status.success() {
         if stderr.contains("NO_POWERPOINT") {
-            return fail("No s’ha trobat Microsoft PowerPoint per a Windows (cal la versió d’escriptori).");
+            return fail("Microsoft PowerPoint for Windows (desktop) was not found.");
         }
-        return fail(format!("PowerPoint no ha pogut desar la fusió: {}", if stderr.is_empty() { "error desconegut" } else { &stderr }));
+        return fail(format!("PowerPoint could not save the merge: {}", if stderr.is_empty() { "unknown error" } else { &stderr }));
     }
     let line = stdout.lines().last().unwrap_or("");
     let mut parts = line.split('|');
     match (parts.next().and_then(|n| n.trim().parse::<usize>().ok()), parts.next()) {
         (Some(n), Some(state)) => Ok((n, state.trim() == "closed")),
-        _ => fail("Resposta inesperada de PowerPoint."),
+        _ => fail("Unexpected reply from PowerPoint."),
     }
 }
 
 #[cfg(not(windows))]
 fn resave(_: &Path, _: &Path, _: usize) -> Result<(usize, bool)> {
-    fail("El motor amb PowerPoint d’aquesta versió fa servir PowerPoint per a Windows.")
+    fail("This build saves with PowerPoint for Windows.")
 }
 
-pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, progress: &dyn Fn(String)) -> Result<PowerPointMergeReport> {
+pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, fixed: Option<(i64, i64)>, progress: &dyn Fn(String)) -> Result<PowerPointMergeReport> {
     if extension(output) != "pptx" {
-        return fail("El motor amb PowerPoint desa en PPTX. Per conservar macros, fes servir la fusió Open XML en PPTM.");
+        return fail("Saving with PowerPoint produces PPTX. To keep macros, use Merge with a PPTM output.");
     }
     if output.exists() || with_suffix(output, ".report.json").exists() || with_suffix(output, ".report.txt").exists() {
-        return fail("El fitxer de sortida o l’informe ja existeix. Tria un altre nom.");
+        return fail("The output file or its report already exists. Choose another name.");
     }
-    let temp = TempDir::new("PPTMergerPowerPoint")?;
-    let intermediate = temp.path().join("fusio-open-xml.pptx");
-    progress("Fusionant i comprovant amb Open XML…".into());
-    let open_xml = crate::merge::merge(inputs, &intermediate, fit)?;
+    let temp = TempDir::new("Deckwright-PowerPoint")?;
+    let intermediate = temp.path().join("open-xml-merge.pptx");
+    progress("Merging and checking…".into());
+    let open_xml = crate::merge::merge(inputs, &intermediate, fit, fixed)?;
     if !open_xml.structural_validation_passed() {
         let issues: Vec<String> = open_xml.validation.iter().flat_map(|v| v.issues.iter().take(5).map(move |i| format!("{}: {i}", v.file))).collect();
-        return fail(format!("La fusió Open XML no supera la comprovació; no s’envia a PowerPoint.\n{}", issues.join("\n")));
+        return fail(format!("The Open XML merge failed its checks; it is not sent to PowerPoint.\n{}", issues.join("\n")));
     }
-    progress("Obrint i desant amb PowerPoint…".into());
+    progress("Opening and saving with PowerPoint…".into());
     let (slides, closed) = resave(&intermediate, output, open_xml.total_slides)?;
-    progress("Comprovant el fitxer desat per PowerPoint…".into());
-    let mut warnings = vec!["Fusió Open XML desada amb Microsoft PowerPoint per automatització COM.".to_string()];
-    warnings.extend(open_xml.warnings.iter().filter(|w| !w.starts_with("Motor Open XML directe")).cloned());
-    warnings.push("Cada presentació conserva el seu patró i tema, com «Mantenir el format d’origen», però no s’ha executat l’ordre d’enganxar de PowerPoint.".into());
+    progress("Checking the file saved by PowerPoint…".into());
+    let mut warnings = vec!["Open XML merge saved with Microsoft PowerPoint through COM automation.".to_string()];
+    warnings.extend(open_xml.warnings.iter().filter(|w| !w.starts_with("Direct Open XML engine")).cloned());
+    warnings.push("Each presentation keeps its master and theme, like “Keep Source Formatting”, but PowerPoint's paste command was not run.".into());
     if !closed {
-        warnings.push("PowerPoint no ha pogut tancar el resultat; continua obert. Tanca’l sense desar canvis.".into());
+        warnings.push("PowerPoint could not close the result; it is still open. Close it without saving changes.".into());
     }
     let mut issues = vec![];
     if slides != open_xml.total_slides {
-        issues.push(format!("PowerPoint ha desat {slides} diapositives; se n’esperaven {}.", open_xml.total_slides));
+        issues.push(format!("PowerPoint saved {slides} slides; expected {}.", open_xml.total_slides));
     }
     let checks: Vec<FileValidation> = crate::office::verify(&[intermediate.clone()], output)?
         .into_iter()
         .map(|c| FileValidation {
-            file: "Fusió Open XML → desat per PowerPoint".into(),
+            file: "Open XML merge → saved by PowerPoint".into(),
             status: if issues.is_empty() { c.status } else { "import_failed_validation".into() },
             checked_slides: c.checked_slides,
             slides_with_animation: c.slides_with_animation,
             binary_resources_checked: c.binary_resources_checked,
             checks: c.checks,
             issues: issues.iter().cloned().chain(c.issues).collect(),
-            needs_review: vec!["PowerPoint ha obert i desat la fusió; no s’ha executat cap enganxament. No es certifica l’aspecte, les fonts, l’edició ni la reproducció.".into(), "PowerPoint reorganitza parts i identificadors en desar; es compara el contingut, no els bytes.".into()],
+            needs_review: vec!["PowerPoint opened and saved the merge; nothing was pasted. Appearance, fonts, editing and playback are not certified.".into(), "PowerPoint reorganises parts and identifiers when saving; the content is compared, not the bytes.".into()],
         })
         .collect();
     let passed = checks.iter().all(|c| c.issues.is_empty());
     let report = PowerPointMergeReport {
-        engine: "OpenXML+PowerPoint-COM-v0.6.0-windows".into(),
+        engine: "Deckwright-OpenXML+PowerPoint-COM-v0.7.0-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         output: output.display().to_string(),
         open_xml,
@@ -184,15 +184,15 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, progress: &dyn Fn(Str
     };
     let written = (|| -> Result<()> {
         write_new(&with_suffix(output, ".report.json"), &crate::to_json(&report)?)?;
-        let mut lines = vec!["PPT MERGER — FUSIÓ OPEN XML DESADA AMB POWERPOINT".to_string(), if report.passed() { "Comprovació estructural superada. Revisió visual i reproducció pendents." } else { "IMPORTACIÓ NO CORRECTA: diferències detectades." }.into(), String::new()];
+        let mut lines = vec!["DECKWRIGHT — OPEN XML MERGE SAVED WITH POWERPOINT".to_string(), if report.passed() { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new()];
         for (i, check) in report.validation().iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
-            lines.push(if check.issues.is_empty() { "ESTRUCTURA: comprovacions superades; no equival a fidelitat total." } else { "IMPORTACIÓ NO CORRECTA" }.into());
+            lines.push(if check.issues.is_empty() { "STRUCTURE: checks passed; this is not full fidelity." } else { "IMPORT NOT CORRECT" }.into());
             lines.extend(check.issues.iter().map(|c| format!("ERROR: {c}")));
-            lines.extend(check.needs_review.iter().map(|c| format!("REVISIÓ PENDENT: {c}")));
+            lines.extend(check.needs_review.iter().map(|c| format!("TO REVIEW: {c}")));
             lines.push(String::new());
         }
-        lines.push("AVISOS".into());
+        lines.push("WARNINGS".into());
         lines.extend(report.warnings.iter().cloned());
         write_new(&with_suffix(output, ".report.txt"), lines.join("\r\n").as_bytes())
     })();

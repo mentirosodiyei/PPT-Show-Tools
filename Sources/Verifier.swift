@@ -34,9 +34,9 @@ func resolvePart(owner: String, target: String) -> String {
 func orderedParts(_ root: URL) throws -> [String] {
     let d = try xml(root, "ppt/presentation.xml"), r = try xml(root, "ppt/_rels/presentation.xml.rels")
     let relationships = Dictionary(children(r.rootElement()!, "Relationship").map { (attr($0, "Id"), attr($0, "Target")) }, uniquingKeysWith: { _, last in last })
-    guard let ids = list(d.rootElement()!, "sldIdLst") else { try fail("Falta la llista de diapositives.") }
+    guard let ids = list(d.rootElement()!, "sldIdLst") else { try fail("The slide list is missing.") }
     return try children(ids, "sldId").map { e in
-        guard let target = relationships[rid(e)] else { try fail("Falta una relació de diapositiva.") }
+        guard let target = relationships[rid(e)] else { try fail("A slide relationship is missing.") }
         return resolvePart(owner: "ppt/presentation.xml", target: target)
     }
 }
@@ -78,9 +78,11 @@ struct PartFingerprint {
         timingTargetIDs = targetIDs
     }
 
-    func expectedTiming(from sourceSize: (Int64, Int64)?, to targetSize: (Int64, Int64)?) -> String {
+    /// `fit` says whether the source was only shrunk to fit (true) or scaled to
+    /// the canvas; nil keeps the historical rule (non-16:9 sources were fitted).
+    func expectedTiming(from sourceSize: (Int64, Int64)?, to targetSize: (Int64, Int64)?, fit fitOverride: Bool? = nil) -> String {
         guard let timingNode, let s = sourceSize, let t = targetSize, s != t else { return timing }
-        let fit = !SlideScaler.isWidescreen(s)
+        let fit = fitOverride ?? !SlideScaler.isWidescreen(s)
         let rawFactor = min(Double(t.0) / Double(s.0), Double(t.1) / Double(s.1))
         let factor = fit ? min(1.0, rawFactor) : rawFactor
         let rx = (Double(s.0) * factor) / Double(t.0)
@@ -152,7 +154,7 @@ struct FileValidation: Codable {
 }
 
 struct PackageVerifier {
-    static func verify(sources: [PackageSnapshot], inputs: [URL], merged: URL) throws -> [FileValidation] {
+    static func verify(sources: [PackageSnapshot], inputs: [URL], merged: URL, fitWithoutEnlarging: [Bool]? = nil) throws -> [FileValidation] {
         let ordered = try orderedParts(merged)
         var results: [FileValidation] = [], offset = 0
         let allFiles = packageFiles(merged), names = Set(allFiles)
@@ -174,14 +176,14 @@ struct PackageVerifier {
             for file in allFiles where file != "[Content_Types].xml" {
                 let ext = file.hasSuffix(".rels") ? "rels" : (file as NSString).pathExtension.lowercased()
                 if !overrides.contains(file) && !defaults.contains(ext) {
-                    globalIssues.append("Falta ContentType al paquet fusionat: \(file)")
+                    globalIssues.append("Missing content type in the merged package: \(file)")
                 }
             }
         }
         if let presRoot = mergedPres.rootElement() {
             if let sldIds = list(presRoot, "sldIdLst") {
                 let ids = children(sldIds, "sldId").map { attr($0, "id") }
-                if Set(ids).count != ids.count { globalIssues.append("IDs de diapositiva (sldId) duplicats a presentation.xml.") }
+                if Set(ids).count != ids.count { globalIssues.append("Duplicate slide IDs (sldId) in presentation.xml.") }
             }
             var masterLayoutIDs: [String] = []
             if let masterIds = list(presRoot, "sldMasterIdLst") {
@@ -193,7 +195,7 @@ struct PackageVerifier {
                 }
             }
             if Set(masterLayoutIDs).count != masterLayoutIDs.count {
-                globalIssues.append("IDs de patró o disseny (sldMasterId/sldLayoutId) duplicats al paquet fusionat.")
+                globalIssues.append("Duplicate master or layout IDs (sldMasterId/sldLayoutId) in the merged package.")
             }
         }
 
@@ -215,44 +217,44 @@ struct PackageVerifier {
             if i == 0 { issues.append(contentsOf: globalIssues) }
             let expected = source.slides.map { prefix + $0 }
             let actual = Array(ordered.dropFirst(offset).prefix(expected.count))
-            if actual != expected { issues.append("El nombre o l’ordre de les diapositives no coincideix amb l’original.") }
+            if actual != expected { issues.append("The number or order of slides does not match the original.") }
             for (part, original) in source.parts.sorted(by: { $0.key < $1.key }) {
                 let destination = prefix + part
-                guard names.contains(destination) else { issues.append("Falta la diapositiva, el disseny o el patró: \(part)"); continue }
+                guard names.contains(destination) else { issues.append("Missing slide, layout or master: \(part)"); continue }
                 let imported = try PartFingerprint(xml(merged, destination).rootElement()!)
-                let number = source.slides.firstIndex(of: part).map { "diapositiva \($0 + 1)" } ?? part
-                let expectedTiming = original.expectedTiming(from: source.slideSize, to: mergedSize)
-                if expectedTiming != imported.timing { issues.append("\(number): l’animació/temporització no coincideix amb l’original (absent o modificada).") }
-                if original.transition != imported.transition { issues.append("\(number): transició o avançament automàtic absent/modificat.") }
-                if original.text != imported.text { issues.append("\(number): text absent o modificat.") }
-                if original.shapeIdentity != imported.shapeIdentity { issues.append("\(number): objectes, identificadors o accions interactives absents/modificats.") }
+                let number = source.slides.firstIndex(of: part).map { "slide \($0 + 1)" } ?? part
+                let expectedTiming = original.expectedTiming(from: source.slideSize, to: mergedSize, fit: fitWithoutEnlarging?[i])
+                if expectedTiming != imported.timing { issues.append("\(number): animation/timing does not match the original (missing or changed).") }
+                if original.transition != imported.transition { issues.append("\(number): transition or automatic advance missing/changed.") }
+                if original.text != imported.text { issues.append("\(number): text missing or changed.") }
+                if original.shapeIdentity != imported.shapeIdentity { issues.append("\(number): objects, identifiers or interactive actions missing/changed.") }
                 let validOriginalTargets = original.timingTargetIDs.intersection(original.shapeIDs)
                 if !validOriginalTargets.isSubset(of: imported.shapeIDs) {
-                    issues.append("\(number): referència d’animació (spid) òrfena cap a un objecte inexistent.")
+                    issues.append("\(number): orphan animation reference (spid) to a missing object.")
                 }
             }
             for (part, links) in source.links.sorted(by: { $0.key < $1.key }) {
-                guard names.contains(prefix + part) else { issues.append("Falten relacions de recursos: \(part)"); continue }
+                guard names.contains(prefix + part) else { issues.append("Missing resource relationships: \(part)"); continue }
                 let imported = children(try xml(merged, prefix + part).rootElement()!, "Relationship")
                 for link in links where !link.type.hasSuffix("/notesMaster") {
-                    guard let relation = imported.first(where: { attr($0, "Id") == link.id }) else { issues.append("Falta la relació \(link.id) a \(part)"); continue }
+                    guard let relation = imported.first(where: { attr($0, "Id") == link.id }) else { issues.append("Missing relationship \(link.id) in \(part)"); continue }
                     let expected = link.external ? link.target : prefix + resolvePart(owner: ownerOfRels(part), target: link.target)
                     let actual = link.external ? attr(relation, "Target") : resolvePart(owner: ownerOfRels(prefix + part), target: attr(relation, "Target"))
                     if actual != expected || attr(relation, "Type") != link.type || (attr(relation, "TargetMode") == "External") != link.external {
-                        issues.append("Recurs enllaçat incorrectament: \(part), relació \(link.id)")
+                        issues.append("Wrongly linked resource: \(part), relationship \(link.id)")
                     }
                 }
             }
             for (part, original) in source.notes.sorted(by: { $0.key < $1.key }) {
-                if try !names.contains(prefix + part) || semantic(xml(merged, prefix + part).rootElement()) != original { issues.append("Notes absents o modificades: \(part)") }
+                if try !names.contains(prefix + part) || semantic(xml(merged, prefix + part).rootElement()) != original { issues.append("Notes missing or changed: \(part)") }
             }
             for (part, original) in source.binaries.sorted(by: { $0.key < $1.key }) {
-                if try !names.contains(prefix + part) || checksum(Data(contentsOf: merged.appendingPathComponent(prefix + part))) != original { issues.append("Recurs multimèdia/font/objecte incrustat absent o modificat: \(part)") }
+                if try !names.contains(prefix + part) || checksum(Data(contentsOf: merged.appendingPathComponent(prefix + part))) != original { issues.append("Media, font or embedded object missing or changed: \(part)") }
             }
-            issues.append(contentsOf: broken.filter { i == 0 ? !$0.hasPrefix("pptMerger/") : $0.hasPrefix(prefix) }.map { "Relació interna trencada: " + $0 })
-            if i == sources.count - 1 && ordered.count != sources.reduce(0, { $0 + $1.slides.count }) { issues.append("El recompte total de diapositives no coincideix.") }
-            var review = ["No comprovat: aspecte visual, geometria final, fonts heretades, reproducció d’animacions/àudio/vídeo, edició i enllaços externs."]
-            if source.hasVBA { review.append(i == 0 ? "VBA del primer fitxer conservat, però funcionament no comprovat." : "El projecte VBA d’aquest fitxer no s’ha integrat: importació incompleta si depèn de macros.") }
+            issues.append(contentsOf: broken.filter { i == 0 ? !$0.hasPrefix("pptMerger/") : $0.hasPrefix(prefix) }.map { "Broken internal relationship: " + $0 })
+            if i == sources.count - 1 && ordered.count != sources.reduce(0, { $0 + $1.slides.count }) { issues.append("The total slide count does not match.") }
+            var review = ["Not checked: visual appearance, final geometry, inherited fonts, animation/audio/video playback, editing and external links."]
+            if source.hasVBA { review.append(i == 0 ? "The first file's VBA is kept, but not tested." : "This file's VBA project was not merged: the import is incomplete if it relies on macros.") }
             results.append(FileValidation(
                 file: inputs[i].lastPathComponent,
                 status: issues.isEmpty ? "structural_checks_passed_needs_review" : "import_failed_validation",
@@ -260,13 +262,13 @@ struct PackageVerifier {
                 slidesWithAnimation: source.slides.filter { source.parts[$0]?.timing != "ABSENT" }.count,
                 binaryResourcesChecked: source.binaries.count,
                 checks: [
-                    "Ordre i nombre de diapositives",
-                    "Arbres complets d’animacions i temporitzacions (també patrons i dissenys) i integritat de spid",
-                    "Transicions i avançaments automàtics",
-                    "Text, objectes i accions",
-                    "Contingut i patró de notes",
-                    "Hash SHA-256 dels recursos multimèdia, fonts i objectes incrustats",
-                    "XML, ContentTypes, unicitat d’IDs i relacions internes"
+                    "Slide order and count",
+                    "Full animation and timing trees (also masters and layouts) and spid integrity",
+                    "Transitions and automatic advance",
+                    "Text, objects and actions",
+                    "Notes content and master",
+                    "SHA-256 of media, fonts and embedded objects",
+                    "XML, content types, unique IDs and internal relationships"
                 ],
                 issues: issues,
                 needsReview: review
@@ -277,7 +279,7 @@ struct PackageVerifier {
     }
 
     static func inspect(inputs: [URL], output: URL) throws -> [FileValidation] {
-        let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("PPTCheck-" + UUID().uuidString)
+        let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("Deckwright-Check-" + UUID().uuidString)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true); defer { try? fm.removeItem(at: temp) }
         var snapshots: [PackageSnapshot] = []
         for (i, input) in inputs.enumerated() {

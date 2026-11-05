@@ -20,5 +20,5 @@ class SemanticText(unittest.TestCase):
    result=verify();self.assertEqual(result.returncode,0,result.stderr+result.stdout)
    parts['ppt/slides/slide1.xml']=slide(['Hello']);parts['ppt/notesSlides/notes1.xml']=notes('99','Lost notes');write(output)
    result=verify();self.assertEqual(result.returncode,2)
-   issues=json.loads(result.stdout)[0]['issues'];self.assertTrue(any('text/ordre' in i for i in issues));self.assertTrue(any('notes diferent' in i for i in issues))
+   issues=json.loads(result.stdout)[0]['issues'];self.assertTrue(any('text/order' in i for i in issues));self.assertTrue(any('notes text differs' in i for i in issues))
 if __name__=='__main__':unittest.main()

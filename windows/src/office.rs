@@ -25,24 +25,24 @@ pub struct OfficePreparation {
 
 pub fn prepare(inputs: &[PathBuf], destination: &Path, fit: bool) -> Result<OfficePreparation> {
     if inputs.len() < 2 || destination.exists() {
-        return fail("Calen dues entrades i una carpeta de preparació nova.");
+        return fail("Two inputs and a new preparation folder are required.");
     }
-    let temp = TempDir::new("PPTOffice")?;
+    let temp = TempDir::new("Deckwright-Office")?;
     let mut roots = vec![];
     let mut docs = vec![];
     let mut sizes = vec![];
     for (i, input) in inputs.iter().enumerate() {
         let e = extension(input);
         if e != "pptx" && e != "pptm" {
-            return fail("Format d’entrada no admès.");
+            return fail("Unsupported input format.");
         }
         let root = temp.path().join(format!("s{i}"));
         std::fs::create_dir_all(&root).or_else(|e| fail(e.to_string()))?;
         extract(input, &root)?;
         let doc = read_xml(&root, "ppt/presentation.xml")?;
-        let Some(size) = slide_size(&doc.root).filter(|_| doc.root.ns == crate::xml::P_NS) else { return fail(format!("No es pot llegir la mida de {}", file_name(input))) };
+        let Some(size) = slide_size(&doc.root).filter(|_| doc.root.ns == crate::xml::P_NS) else { return fail(format!("Cannot read the size of {}", file_name(input))) };
         if !scaler::is_widescreen(size) && !fit {
-            return Err(Error::FormatChoice(format!("{} no és 16:9. Tria encaixar sense ampliar o modifica’l manualment.", file_name(input))));
+            return Err(Error::FormatChoice(format!("{} is not 16:9. Choose to fit it without enlarging, or change it yourself.", file_name(input))));
         }
         roots.push(root);
         docs.push(doc);
@@ -126,7 +126,7 @@ fn media(root: &Path, slides: &[String]) -> Result<HashSet<String>> {
         }
         let path = crate::xml::part_path(root, &owner);
         if !path.exists() {
-            return fail(format!("Relació interna trencada: {owner}"));
+            return fail(format!("Broken internal relationship: {owner}"));
         }
         let lower = owner.to_lowercase();
         if lower.contains("/media/") || lower.contains("/embeddings/") {
@@ -144,7 +144,7 @@ fn media(root: &Path, slides: &[String]) -> Result<HashSet<String>> {
 }
 
 pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
-    let temp = TempDir::new("PPTOfficeCheck")?;
+    let temp = TempDir::new("Deckwright-OfficeCheck")?;
     let merged = temp.path().join("merged");
     std::fs::create_dir_all(&merged).or_else(|e| fail(e.to_string()))?;
     extract(output, &merged)?;
@@ -160,7 +160,7 @@ pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> 
         let mut issues = vec![];
         let mut animated = 0;
         if imported.len() != originals.len() {
-            issues.push("Recompte de diapositives incorrecte.".to_string());
+            issues.push("Wrong slide count.".to_string());
         }
         for j in 0..originals.len().min(imported.len()) {
             let a_doc = read_xml(&source, &originals[j])?;
@@ -172,16 +172,16 @@ pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> 
             }
             let n = j + 1;
             if semantic_text(&a_doc, false) != semantic_text(&b_doc, false) {
-                issues.push(format!("Diapositiva {n}: text/ordre diferent."));
+                issues.push(format!("Slide {n}: text/order differs."));
             }
             if before.timing != after.timing {
-                issues.push(format!("Diapositiva {n}: animació/temporització absent o diferent. PowerPoint també pot haver reassignat identificadors; cal revisió."));
+                issues.push(format!("Slide {n}: animation/timing missing or different. PowerPoint may also have reassigned identifiers; review needed."));
             }
             if before.transition != after.transition {
-                issues.push(format!("Diapositiva {n}: transició/avançament absent o diferent."));
+                issues.push(format!("Slide {n}: transition/advance missing or different."));
             }
             if notes_text(&source, &originals[j])? != notes_text(&merged, &imported[j])? {
-                issues.push(format!("Diapositiva {n}: text de notes diferent."));
+                issues.push(format!("Slide {n}: notes text differs."));
             }
             for suffix in ["/slideLayout", "/slideMaster"] {
                 let mut a = related(&source, &originals[j], "/slideLayout")?;
@@ -195,10 +195,10 @@ pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> 
                         let af = PartFingerprint::new(&read_xml(&source, &a)?.root);
                         let bf = PartFingerprint::new(&read_xml(&merged, &b)?.root);
                         if af.timing != bf.timing || af.transition != bf.transition {
-                            issues.push(format!("Diapositiva {n}: animació/transició del patró o disseny diferent."));
+                            issues.push(format!("Slide {n}: master or layout animation/transition differs."));
                         }
                     }
-                    (Some(_), None) => issues.push(format!("Diapositiva {n}: falta el patró/disseny d’origen.")),
+                    (Some(_), None) => issues.push(format!("Slide {n}: source master/layout missing.")),
                     _ => {}
                 }
             }
@@ -206,13 +206,13 @@ pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> 
         let original_media = media(&source, &originals)?;
         let imported_media = media(&merged, &imported)?;
         if !original_media.is_subset(&imported_media) {
-            issues.push("Falten recursos multimèdia/objectes incrustats idèntics als originals (o PowerPoint els ha transformat).".into());
+            issues.push("Media/embedded objects identical to the originals are missing (or PowerPoint transformed them).".into());
         }
         let size = read_xml(&source, "ppt/presentation.xml")?;
         let out_size = read_xml(&merged, "ppt/presentation.xml")?;
         if let (Some(a), Some(b)) = (size.root.child("sldSz"), out_size.root.child("sldSz")) {
             if a.attr("cx") != b.attr("cx") || a.attr("cy") != b.attr("cy") {
-                issues.push("La mida del destí no coincideix amb les còpies preparades.".into());
+                issues.push("The output size does not match the prepared copies.".into());
             }
         }
         results.push(FileValidation {
@@ -221,16 +221,16 @@ pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> 
             checked_slides: imported.len(),
             slides_with_animation: animated,
             binary_resources_checked: original_media.len(),
-            checks: vec!["Diapositives en ordre, text, animacions, transicions, notes, mida i recursos accessibles".into()],
+            checks: vec!["Slides in order, text, animations, transitions, notes, size and reachable resources".into()],
             issues,
-            needs_review: vec!["Importació amb format d’origen de PowerPoint. No certifica aspecte, fonts, edició ni reproducció; les macros dels fitxers afegits no es fusionen.".into(), "Els identificadors de PowerPoint poden canviar i produir diferències que requereixen revisió. No és equivalència binària.".into()],
+            needs_review: vec!["Import with PowerPoint source formatting. Appearance, fonts, editing and playback are not certified; macros from added files are not merged.".into(), "PowerPoint identifiers can change and cause differences that need review. This is not binary equivalence.".into()],
         });
         offset += originals.len();
     }
     if offset != output_slides.len() {
         if let Some(last) = results.last_mut() {
             last.status = "import_failed_validation".into();
-            last.issues.push("Recompte total incorrecte.".into());
+            last.issues.push("Wrong total count.".into());
         }
     }
     Ok(results)
