@@ -54,7 +54,7 @@ struct MainView: View {
             Picker("Function", selection: $function) {
                 ForEach(DeckFunction.allCases) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).fixedSize()
-            Text(explanation).font(.callout).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text(explanation).font(.callout).foregroundStyle(.secondary)
             if function == .merge { mergeContent } else { fileContent }
             if busy { ProgressView(function == .merge ? "Merging…" : "Converting and checking…") }
             Text(status).font(.callout).textSelection(.enabled)
@@ -62,7 +62,7 @@ struct MainView: View {
             if let toolReport, function != .merge { reportDetails(toolReport) }
             if function != .merge { Spacer(minLength: 0) }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading).padding(24)
+        .padding(24).frame(minWidth: 680, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity, alignment: .topLeading)
         .disabled(busy)
         .onChange(of: function) {
             source = nil; toolReport = nil

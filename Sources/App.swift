@@ -109,6 +109,6 @@ struct DeckwrightApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Deckwright") { MainView() }.defaultSize(width: 850, height: 650)
+        WindowGroup("Deckwright") { MainView() }.defaultSize(width: 850, height: 650).windowResizability(.contentMinSize)
     }
 }

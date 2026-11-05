@@ -28,11 +28,13 @@ The checks are structural. They do not certify visual fidelity, playback, fonts 
 
 ## Building
 
-**macOS** (Swift/SwiftUI, Apple Silicon, macOS 14+):
+**macOS** (Swift/SwiftUI, macOS 14+, universal: Apple Silicon and Intel):
 
 ```sh
-./build.sh            # → dist/Deckwright.app
+./build.sh            # → dist/Deckwright.app and dist/Deckwright-<version>.dmg
 ```
+
+The DMG holds the app and a link to Applications: open it and drag Deckwright onto Applications.
 
 **Windows** (Rust, built on the Mac with `cargo-xwin` and NSIS):
 

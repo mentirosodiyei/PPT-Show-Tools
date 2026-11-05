@@ -1,7 +1,7 @@
 #!/bin/zsh
 set -eu
 cd "${0:A:h}"
-VERSION=0.7.0
+VERSION=0.7.1
 FINAL="$PWD/dist/Deckwright.app"
 # Synced folders (iCloud Drive / File Provider) keep re-adding Finder metadata,
 # which makes codesign fail. Build and sign in a private temp folder instead.
@@ -13,7 +13,12 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 [[ -d "$SDK" ]] || SDK="$(xcrun --show-sdk-path)"
 # Module cache outside Documents, which iCloud syncs.
-xcrun swiftc -sdk "$SDK" -module-cache-path "$HOME/Library/Caches/Deckwright-mac-build/module-cache" -swift-version 5 -O -target arm64-apple-macosx14.0 -parse-as-library Sources/Engine.swift Sources/SlideScaler.swift Sources/Verifier.swift Sources/OfficePipeline.swift Sources/PowerPointSave.swift Sources/ConversionTools.swift Sources/MainView.swift Sources/App.swift -o "$APP/Contents/MacOS/Deckwright"
+SOURCES=(Sources/Engine.swift Sources/SlideScaler.swift Sources/Verifier.swift Sources/OfficePipeline.swift Sources/PowerPointSave.swift Sources/ConversionTools.swift Sources/MainView.swift Sources/App.swift)
+# Universal app: one slice for Apple Silicon and one for Intel; macOS runs the right one.
+for ARCH in arm64 x86_64; do
+  xcrun swiftc -sdk "$SDK" -module-cache-path "$HOME/Library/Caches/Deckwright-mac-build/module-cache-$ARCH" -swift-version 5 -O -target "$ARCH-apple-macosx14.0" -parse-as-library "${SOURCES[@]}" -o "$STAGE/Deckwright-$ARCH"
+done
+lipo -create "$STAGE/Deckwright-arm64" "$STAGE/Deckwright-x86_64" -output "$APP/Contents/MacOS/Deckwright"
 cat > "$APP/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -40,4 +45,13 @@ mkdir -p dist
 [[ -e "$FINAL" ]] && rm -rf -- "$FINAL"
 ditto --norsrc --noextattr "$APP" "$FINAL"
 
+# Disk image with the app and a link to Applications, for drag-and-drop install.
+DMG="$PWD/dist/Deckwright-$VERSION.dmg"
+mkdir -p "$STAGE/dmg"
+ditto --norsrc --noextattr "$APP" "$STAGE/dmg/Deckwright.app"
+ln -s /Applications "$STAGE/dmg/Applications"
+[[ -e "$DMG" ]] && rm -f -- "$DMG"
+hdiutil create -quiet -volname "Deckwright" -srcfolder "$STAGE/dmg" -fs HFS+ -format UDZO -ov "$DMG"
+
 echo "$FINAL"
+echo "$DMG"
