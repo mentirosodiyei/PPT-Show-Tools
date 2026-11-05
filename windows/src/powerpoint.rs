@@ -72,13 +72,17 @@ fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)
     let mut bytes = b"\xEF\xBB\xBF".to_vec();
     bytes.extend_from_slice(SCRIPT.as_bytes());
     std::fs::write(&script, bytes).or_else(|e| fail(e.to_string()))?;
+    // PowerPoint resolves relative paths against its own folder; absolute paths
+    // also never start with "-", which PowerShell would read as a parameter.
+    let source = std::path::absolute(source).or_else(|e| fail(e.to_string()))?;
+    let target = std::path::absolute(target).or_else(|e| fail(e.to_string()))?;
     let mut child = std::process::Command::new("powershell.exe")
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Source")
-        .arg(source)
+        .arg(&source)
         .arg("-Target")
-        .arg(target)
+        .arg(&target)
         .arg("-Expected")
         .arg(expected.to_string())
         .stdout(std::process::Stdio::piped())
@@ -158,7 +162,12 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, fixed: Option<(i64, i
     if slides != open_xml.total_slides {
         issues.push(format!("PowerPoint saved {slides} slides; expected {}.", open_xml.total_slides));
     }
-    let checks: Vec<FileValidation> = crate::office::verify(&[intermediate.clone()], output)?
+    // A result that cannot even be checked is not left behind as if it were valid.
+    let verified = crate::office::verify(&[intermediate.clone()], output).map_err(|e| {
+        let _ = std::fs::remove_file(output);
+        e
+    })?;
+    let checks: Vec<FileValidation> = verified
         .into_iter()
         .map(|c| FileValidation {
             file: "Open XML merge → saved by PowerPoint".into(),
@@ -173,7 +182,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit: bool, fixed: Option<(i64, i
         .collect();
     let passed = checks.iter().all(|c| c.issues.is_empty());
     let report = PowerPointMergeReport {
-        engine: "Deckwright-OpenXML+PowerPoint-COM-v0.7.0-windows".into(),
+        engine: "Deckwright-OpenXML+PowerPoint-COM-v0.7.4-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         output: output.display().to_string(),
         open_xml,

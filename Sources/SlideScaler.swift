@@ -30,7 +30,7 @@ struct SlideScaler {
             let dir = package.appendingPathComponent("ppt/" + folder)
             guard fm.fileExists(atPath: dir.path), let files = fm.enumerator(at: dir, includingPropertiesForKeys: nil) else { continue }
             for case let file as URL in files where file.pathExtension == "xml" {
-                let document = try XMLDocument(contentsOf: file, options: .nodePreserveAll)
+                let document = try parseXML(at: file)
                 let isMaster = folder == "slideMasters" || folder == "theme"
                 if !isUnitScale {
                     try scale(document, factor: factor, isMaster: isMaster)

@@ -69,15 +69,17 @@ fn publish(staged: &Path, report: &ToolReport) -> Result<()> {
     Ok(())
 }
 
-pub fn log_failure(input: &Path, error: &str) -> String {
+/// The error log goes to the folder the user chose for the output, never next
+/// to the original, and never replaces an existing file.
+pub fn log_failure(output: &Path, error: &str) -> String {
     let name = format!("Deckwright-ERROR-{}.log", uuid::Uuid::new_v4());
-    let log = input.parent().unwrap_or(Path::new(".")).join(&name);
+    let log = output.parent().unwrap_or(Path::new(".")).join(&name);
     match write_new(&log, error.as_bytes()) {
         Ok(()) => log.display().to_string(),
         Err(_) => {
             let fallback = std::env::temp_dir().join(&name);
-            let _ = std::fs::write(&fallback, error);
-            format!("Could not write next to the original. Log written to: {}", fallback.display())
+            let _ = write_new(&fallback, error.as_bytes());
+            format!("Could not write next to the output. Log written to: {}", fallback.display())
         }
     }
 }
@@ -256,6 +258,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
     let before = PackageSnapshot::capture(root.path())?;
     let mut pres = read_xml(root.path(), "ppt/presentation.xml")?;
     let Some((w, h)) = crate::verifier::slide_size(&pres.root) else { return fail("Cannot read the slide size.") };
+    crate::merge::require_source_size((w, h), &crate::package::file_name(input))?;
     let (target, fit) = match fixed {
         Some(target) => {
             if (w, h) == target {

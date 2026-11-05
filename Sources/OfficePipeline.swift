@@ -12,7 +12,7 @@ struct OfficePipeline {
             guard ["pptx","pptm"].contains(input.pathExtension.lowercased()) else {try fail("Unsupported input format.")}
             let root=temp.appendingPathComponent("s\(i)");try fm.createDirectory(at:root,withIntermediateDirectories:true)
             try extractPackage(input,to:root);let doc=try xml(root,"ppt/presentation.xml")
-            guard doc.rootElement()?.uri == pNS,let size=list(doc.rootElement()!,"sldSz"),let w=Int64(attr(size,"cx")),let h=Int64(attr(size,"cy")),w>0,h>0 else{try fail("Cannot read the size of \(input.lastPathComponent)")}
+            guard doc.rootElement()?.uri == pNS,let size=list(doc.rootElement()!,"sldSz"),let w=Int64(attr(size,"cx")),let h=Int64(attr(size,"cy")),(minSlideEMU...maxSlideEMU).contains(w),(minSlideEMU...maxSlideEMU).contains(h) else{try fail("Cannot read the size of \(input.lastPathComponent)")}
             if !SlideScaler.isWidescreen((w,h)) && !fit {throw FormatChoiceRequired(message:"\(input.lastPathComponent) is not 16:9. Choose to fit it without enlarging, or change it yourself.")}
             roots.append(root);docs.append(doc);sizes.append((w,h))
         }
@@ -76,7 +76,7 @@ struct OfficePipeline {
             while let owner=pending.popLast() {
                 guard seen.insert(owner).inserted else{continue}
                 guard fm.fileExists(atPath:root.appendingPathComponent(owner).path) else{try fail("Broken internal relationship: \(owner)")}
-                if owner.lowercased().contains("/media/") || owner.lowercased().contains("/embeddings/") {hashes.insert(checksum(try Data(contentsOf:root.appendingPathComponent(owner))))}
+                if owner.lowercased().contains("/media/") || owner.lowercased().contains("/embeddings/") {hashes.insert(try checksumFile(root.appendingPathComponent(owner)))}
                 let rel=(owner as NSString).deletingLastPathComponent+"/_rels/"+(owner as NSString).lastPathComponent+".rels"
                 if fm.fileExists(atPath:root.appendingPathComponent(rel).path) {
                     for r in children(try xml(root,rel).rootElement()!,"Relationship") where attr(r,"TargetMode") != "External" {

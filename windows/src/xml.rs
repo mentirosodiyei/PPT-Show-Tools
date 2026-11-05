@@ -189,6 +189,8 @@ impl Document {
         let mut scopes: Vec<Vec<(String, String)>> = vec![];
         let mut prolog = vec![];
         let mut root: Option<Element> = None;
+        // Real parts nest a few dozen levels; a hostile part could exhaust the stack.
+        const MAX_DEPTH: usize = 256;
         loop {
             let event = reader.read_event().or_else(|e| fail(format!("Invalid XML: {e}")))?;
             let push = |node: Node, stack: &mut Vec<Element>, prolog: &mut Vec<Node>| match stack.last_mut() {
@@ -208,8 +210,9 @@ impl Document {
                     for a in e.attributes() {
                         let a = a.or_else(|err| fail(format!("Invalid XML attribute: {err}")))?;
                         let key = utf8(a.key.as_ref())?;
-                        // Attribute-value normalization: literal tabs and line breaks are spaces.
-                        let rawv: String = utf8(&a.value)?.chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect();
+                        // Attribute-value normalization: CRLF counts as one line break, and
+                        // literal tabs and line breaks become spaces.
+                        let rawv: String = utf8(&a.value)?.replace("\r\n", "\n").chars().map(|c| if c == '\t' || c == '\n' || c == '\r' { ' ' } else { c }).collect();
                         let value = quick_xml::escape::unescape(&rawv).or_else(|err| fail(format!("Invalid XML entity: {err}")))?.into_owned();
                         if key == "xmlns" {
                             scope.push((String::new(), value.clone()));
@@ -240,6 +243,9 @@ impl Document {
                             None => root = Some(element),
                         }
                     } else {
+                        if stack.len() >= MAX_DEPTH {
+                            return fail("XML nested too deeply.");
+                        }
                         stack.push(element);
                     }
                 }
@@ -252,13 +258,17 @@ impl Document {
                     }
                 }
                 Event::Text(t) => {
-                    let s = t.unescape().or_else(|err| fail(format!("Invalid XML text: {err}")))?.into_owned();
+                    // XML end-of-line handling: CRLF and lone CR become LF.
+                    let raw = utf8(&t)?.replace("\r\n", "\n").replace('\r', "\n");
+                    let s = quick_xml::escape::unescape(&raw).or_else(|err| fail(format!("Invalid XML text: {err}")))?.into_owned();
                     push(Node::Text(s), &mut stack, &mut prolog);
                 }
                 Event::CData(t) => push(Node::CData(utf8(&t.into_inner())?), &mut stack, &mut prolog),
                 Event::Comment(t) => push(Node::Comment(utf8(&t.into_inner())?), &mut stack, &mut prolog),
                 Event::PI(t) => push(Node::PI(utf8(&t)?), &mut stack, &mut prolog),
-                Event::Decl(_) | Event::DocType(_) => {}
+                // Parts never contain a DTD; refusing one rules out entity expansion.
+                Event::DocType(_) => return fail("The part contains a document type declaration (DTD), which PowerPoint files never use."),
+                Event::Decl(_) => {}
                 Event::Eof => break,
             }
         }
@@ -359,12 +369,29 @@ fn write_element(e: &Element, out: &mut String) {
     out.push('>');
 }
 
+/// Path of a package part inside `root`. A part name comes from untrusted
+/// relationships: on Windows a segment such as "C:" or "..\\x" would leave
+/// `root`, so such segments are replaced and the part simply does not exist.
 pub fn part_path(root: &Path, part: &str) -> std::path::PathBuf {
     let mut p = root.to_path_buf();
-    for seg in part.split('/').filter(|s| !s.is_empty()) {
-        p.push(seg);
+    for seg in part.split('/').filter(|s| !s.is_empty() && *s != ".") {
+        let unsafe_segment = seg == ".." || seg.contains('\\') || seg.contains(':');
+        p.push(if unsafe_segment { "_invalid_part_" } else { seg });
     }
     p
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn part_paths_never_leave_the_package() {
+        let root = std::path::Path::new("/tmp/package");
+        for part in ["C:/Windows/win.ini", "..\\..\\secret.txt", "a/../../b", "ppt/../..", "x:y/z", "ppt/slides/slide1.xml"] {
+            let path = super::part_path(root, part);
+            assert!(path.starts_with(root), "{part} -> {}", path.display());
+            assert!(path.components().skip(root.components().count()).all(|c| matches!(c, std::path::Component::Normal(n) if !n.to_string_lossy().contains(['\\', ':']))), "{part}");
+        }
+    }
 }
 pub fn read_xml(root: &Path, part: &str) -> Result<Document> {
     let data = std::fs::read(part_path(root, part)).or_else(|e| fail(format!("Cannot read {part}: {e}")))?;

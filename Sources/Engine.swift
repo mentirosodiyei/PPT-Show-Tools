@@ -54,31 +54,82 @@ func planSlideSize(_ sizes: [(Int64, Int64)], fixed: (Int64, Int64)?, fitNonMatc
     try requireValidSlideSize(plan.target)
     return plan
 }
-// Packages are untrusted input. ditto drops "../" components, but keeps symbolic
-// links, which later reads would follow outside the package. Reject them, and
-// refuse archives that would expand beyond a sane size before writing anything.
-let maxPackageBytes: Int64 = 8 * 1024 * 1024 * 1024, maxPackageEntries = 100_000
-func extractPackage(_ input: URL, to dir: URL) throws {
+// Packages are untrusted input. Entry names are checked before anything is
+// written (no absolute or parent paths, no duplicates, also differing only in
+// case, as the disk is case-insensitive); the real number of bytes written is
+// watched while ditto extracts, since the sizes a ZIP declares can lie; and
+// symbolic links are refused afterwards, as later reads would follow them.
+let maxPackageEntries = 100_000
+var maxPackageBytes: Int64 {
+    // DECKWRIGHT_MAX_PACKAGE_BYTES lowers the limit for the test suite.
+    Int64(ProcessInfo.processInfo.environment["DECKWRIGHT_MAX_PACKAGE_BYTES"] ?? "") ?? 8 * 1024 * 1024 * 1024
+}
+private func capture(_ executable: String, _ args: [String]) throws -> (Int32, Data) {
     let task = Process(), pipe = Pipe()
-    task.executableURL = URL(fileURLWithPath: "/usr/bin/zipinfo"); task.arguments = ["-t", input.path]
+    task.executableURL = URL(fileURLWithPath: executable); task.arguments = args
     task.standardOutput = pipe; task.standardError = FileHandle.nullDevice
     try task.run()
-    let summary = String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+    let data = pipe.fileHandleForReading.readDataToEndOfFile()
     task.waitUntilExit()
-    let numbers = summary.split(whereSeparator: { !$0.isNumber }).compactMap { Int64($0) }
-    guard task.terminationStatus == 0, numbers.count >= 2 else { try fail("“\(input.lastPathComponent)” is not a valid PowerPoint ZIP package.") }
-    guard numbers[0] <= maxPackageEntries, numbers[1] <= maxPackageBytes else { try fail("“\(input.lastPathComponent)” is too large or has too many entries to process safely.") }
-    try run("/usr/bin/ditto", ["-x", "-k", input.path, dir.path])
+    return (task.terminationStatus, data)
+}
+private func bytesOnDisk(_ dir: URL) -> Int64 {
+    var total: Int64 = 0
+    if let items = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.fileSizeKey]) {
+        for case let url as URL in items { total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0) }
+    }
+    return total
+}
+func extractPackage(_ input: URL, to dir: URL) throws {
+    let name = input.lastPathComponent
+    let tooLarge = "“\(name)” is too large or has too many entries to process safely."
+    let (status, listing) = try capture("/usr/bin/zipinfo", ["-1", input.path])
+    guard status == 0 else { try fail("“\(name)” is not a valid PowerPoint ZIP package.") }
+    let entries = String(decoding: listing, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
+    guard !entries.isEmpty else { try fail("“\(name)” is not a valid PowerPoint ZIP package.") }
+    guard entries.count <= maxPackageEntries else { try fail(tooLarge) }
+    var seen = Set<String>()
+    for entry in entries where !entry.hasSuffix("/") {
+        let segments = entry.split(separator: "/", omittingEmptySubsequences: false)
+        guard !entry.hasPrefix("/"), !entry.contains("\\"), !segments.contains(where: { $0 == ".." || $0 == "." }) else { try fail("“\(name)”: unsupported ZIP entry path: \(entry)") }
+        guard seen.insert(entry.lowercased()).inserted else { try fail("“\(name)”: duplicate ZIP entry: \(entry)") }
+    }
+    let (totalStatus, totals) = try capture("/usr/bin/zipinfo", ["-t", input.path])
+    let numbers = String(decoding: totals, as: UTF8.self).split(whereSeparator: { !$0.isNumber }).compactMap { Int64($0) }
+    guard totalStatus == 0, numbers.count >= 2 else { try fail("“\(name)” is not a valid PowerPoint ZIP package.") }
+    guard numbers[1] <= maxPackageBytes else { try fail(tooLarge) }
+    let task = Process()
+    task.executableURL = URL(fileURLWithPath: "/usr/bin/ditto"); task.arguments = ["-x", "-k", input.path, dir.path]
+    task.standardOutput = FileHandle.nullDevice; task.standardError = FileHandle.nullDevice
+    try task.run()
+    // Wake often so small packages finish without delay; measure the disk every 0.25 s.
+    var exceeded = false, ticks = 0
+    while task.isRunning {
+        Thread.sleep(forTimeInterval: 0.005); ticks += 1
+        if ticks % 50 == 0, bytesOnDisk(dir) > maxPackageBytes { exceeded = true; task.terminate(); break }
+    }
+    task.waitUntilExit()
+    if exceeded || bytesOnDisk(dir) > maxPackageBytes { try? FileManager.default.removeItem(at: dir); try fail(tooLarge) }
+    guard task.terminationStatus == 0 else { try fail("“\(name)” is not a valid PowerPoint ZIP package.") }
     let keys: [URLResourceKey] = [.isSymbolicLinkKey, .isRegularFileKey, .isDirectoryKey]
     guard let items = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: keys) else { try fail("Cannot read the extracted package.") }
     for case let url as URL in items {
         let values = try url.resourceValues(forKeys: Set(keys))
         if values.isSymbolicLink == true || (values.isRegularFile != true && values.isDirectory != true) {
-            try fail("“\(input.lastPathComponent)” contains symbolic links or special entries, which a PowerPoint file cannot have: \(url.lastPathComponent)")
+            try fail("“\(name)” contains symbolic links or special entries, which a PowerPoint file cannot have: \(url.lastPathComponent)")
         }
     }
 }
-func xml(_ root: URL, _ path: String) throws -> XMLDocument { try XMLDocument(contentsOf: root.appendingPathComponent(path), options: [.nodePreserveAll]) }
+/// Parts never contain a DTD; refusing one rules out entity expansion, and
+/// external entities are never loaded.
+func parseXML(at url: URL) throws -> XMLDocument {
+    let data = try Data(contentsOf: url)
+    if data.range(of: Data("<!DOCTYPE".utf8)) != nil || data.range(of: Data("<!doctype".utf8)) != nil {
+        try fail("\(url.lastPathComponent) contains a document type declaration (DTD), which PowerPoint files never use.")
+    }
+    return try XMLDocument(data: data, options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever])
+}
+func xml(_ root: URL, _ path: String) throws -> XMLDocument { try parseXML(at: root.appendingPathComponent(path)) }
 func children(_ e: XMLElement, _ local: String) -> [XMLElement] { (e.children ?? []).compactMap { $0 as? XMLElement }.filter { $0.localName == local } }
 func attr(_ e: XMLElement, _ name: String) -> String { e.attribute(forName: name)?.stringValue ?? "" }
 func set(_ e: XMLElement, _ name: String, _ value: String) { if let a = e.attribute(forName: name) { a.stringValue = value } else { e.addAttribute(XMLNode.attribute(withName: name, stringValue: value) as! XMLNode) } }
@@ -87,7 +138,29 @@ func set(_ e: XMLElement, _ name: String, _ value: String) { if let a = e.attrib
 func serializedXML(_ doc: XMLDocument) -> Data {
     let raw = String(decoding: doc.xmlData, as: UTF8.self)
     var result = "", inTag = false, quote: Unicode.Scalar? = nil
-    for c in raw.unicodeScalars {
+    // Comments, CDATA and processing instructions are copied verbatim: a quote
+    // inside them must not be taken for the start of an attribute value.
+    var verbatimEnd: [Unicode.Scalar]? = nil, tail: [Unicode.Scalar] = []
+    let scalars = Array(raw.unicodeScalars)
+    var index = 0
+    func starts(_ token: String, at i: Int) -> Bool {
+        let t = Array(token.unicodeScalars)
+        return i + t.count <= scalars.count && Array(scalars[i..<i + t.count]) == t
+    }
+    while index < scalars.count {
+        let c = scalars[index]; index += 1
+        if let end = verbatimEnd {
+            result.unicodeScalars.append(c); tail.append(c)
+            if tail.count > end.count { tail.removeFirst() }
+            if tail == end { verbatimEnd = nil; tail = [] }
+            continue
+        }
+        if quote == nil && c == "<" {
+            for (open, close) in [("!--", "-->"), ("![CDATA[", "]]>"), ("?", "?>")] where starts(open, at: index) {
+                verbatimEnd = Array(close.unicodeScalars)
+            }
+            if verbatimEnd != nil { result.unicodeScalars.append(c); continue }
+        }
         if let delimiter = quote {
             if c == delimiter { quote = nil; result.unicodeScalars.append(c) }
             else if c == "\n" { result += "&#10;" }
@@ -184,6 +257,9 @@ struct OpenXMLMerger {
                   width > 0, height > 0 else {
                 try fail("Cannot read the slide size of file \(i + 1): “\(inputs[i].lastPathComponent)”.")
             }
+            guard (minSlideEMU...maxSlideEMU).contains(width), (minSlideEMU...maxSlideEMU).contains(height) else {
+                try fail("“\(inputs[i].lastPathComponent)” has a slide size outside PowerPoint's limits (1–56 in per side).")
+            }
             return (width, height)
         }
         let originals = try roots.map { try PackageSnapshot.capture($0) }
@@ -205,12 +281,15 @@ struct OpenXMLMerger {
         ]
         warnings.append(contentsOf: scalingWarnings)
         let baseTypes = ct.rootElement()!
-        var nextSlide = (children(list(root, "sldIdLst")!, "sldId").compactMap { UInt32(attr($0, "id")) }.max() ?? 255) + 1
+        // ST_SlideId allows 256…2147483647; reject anything that would overflow.
+        let highestSlide = children(list(root, "sldIdLst")!, "sldId").compactMap { Int64(attr($0, "id")) }.max() ?? 255
+        guard highestSlide < 2147483647 else { try fail("Too many slide identifiers to create a valid presentation.") }
+        var nextSlide = UInt32(highestSlide + 1)
         var nextMaster: UInt64 = 2147483648
         for d in docs {
             if let masters = list(d.rootElement()!, "sldMasterIdLst") {
                 for m in children(masters, "sldMasterId") {
-                    if let id = UInt64(attr(m, "id")) { nextMaster = max(nextMaster, id + 1) }
+                    if let id = UInt64(attr(m, "id")), id < UInt64(UInt32.max) { nextMaster = max(nextMaster, id + 1) }
                 }
             }
         }
@@ -218,9 +297,9 @@ struct OpenXMLMerger {
         for dir in roots {
             if let en = fm.enumerator(at: dir.appendingPathComponent("ppt/slideMasters"), includingPropertiesForKeys: nil) {
                 for case let url as URL in en where url.pathExtension == "xml" {
-                    let d = try XMLDocument(contentsOf: url)
+                    let d = try parseXML(at: url)
                     for node in try d.nodes(forXPath: "//*[local-name() = 'sldLayoutId']") {
-                        if let e = node as? XMLElement, let id = UInt64(attr(e, "id")) { nextMaster = max(nextMaster, id + 1) }
+                        if let e = node as? XMLElement, let id = UInt64(attr(e, "id")), id < UInt64(UInt32.max) { nextMaster = max(nextMaster, id + 1) }
                     }
                 }
             }
@@ -256,7 +335,7 @@ struct OpenXMLMerger {
             try fm.copyItem(at: source, to: dest)
             guard let en = fm.enumerator(at: dest, includingPropertiesForKeys: [.isRegularFileKey]) else { try fail("Cannot read the package.") }
             for case let url as URL in en where url.lastPathComponent.hasSuffix(".rels") {
-                let d = try XMLDocument(contentsOf: url, options: .nodePreserveAll)
+                let d = try parseXML(at: url)
                 for e in children(d.rootElement()!, "Relationship") where attr(e, "TargetMode") != "External" {
                     if attr(e, "Type").hasSuffix("/notesMaster"), let notesTarget {
                         set(e, "Target", notesTarget)
@@ -268,7 +347,7 @@ struct OpenXMLMerger {
             }
             if let en = fm.enumerator(at: dest.appendingPathComponent("ppt/slideMasters"), includingPropertiesForKeys: nil) {
                 for case let url as URL in en where url.pathExtension == "xml" {
-                    let d = try XMLDocument(contentsOf: url, options: .nodePreserveAll)
+                    let d = try parseXML(at: url)
                     for node in try d.nodes(forXPath: "//*[local-name() = 'sldLayoutId']") {
                         if let e = node as? XMLElement { set(e, "id", String(nextMaster)); nextMaster += 1 }
                     }
@@ -362,7 +441,7 @@ struct OpenXMLMerger {
             }
         }
         // ST_SlideId allows 256…2147483647; ST_SlideMasterId starts at 2147483648.
-        guard nextSlide <= 2147483648 else { try fail("Too many slide identifiers to create a valid presentation.") }
+        guard nextSlide <= 2147483648, nextMaster <= 4294967296 else { try fail("Too many slide identifiers to create a valid presentation.") }
         try write(pres, base, "ppt/presentation.xml"); try write(rels, base, "ppt/_rels/presentation.xml.rels"); try write(ct, base, "[Content_Types].xml")
         let archive = temp.appendingPathComponent("result.zip")
         try run("/usr/bin/ditto", ["-c", "-k", "--norsrc", "--noextattr", base.path, archive.path])
@@ -370,7 +449,7 @@ struct OpenXMLMerger {
         try fm.createDirectory(at: verificationRoot, withIntermediateDirectories: true)
         try run("/usr/bin/ditto", ["-x", "-k", archive.path, verificationRoot.path])
         let validation = try PackageVerifier.verify(sources: originals, inputs: inputs, merged: verificationRoot, fitWithoutEnlarging: plan.fitWithoutEnlarging)
-        let report = MergeReport(engine: "Deckwright-OpenXML-v0.7.0", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
+        let report = MergeReport(engine: "Deckwright-OpenXML-v0.7.4", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
         try fm.copyItem(at: archive, to: output)
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -384,7 +463,7 @@ struct OpenXMLMerger {
                 lines.append("")
             }
             lines += ["WARNINGS"] + warnings
-            try lines.joined(separator: "\n").write(to: URL(fileURLWithPath: output.path + ".report.txt"), atomically: false, encoding: .utf8)
+            try Data(lines.joined(separator: "\n").utf8).write(to: URL(fileURLWithPath: output.path + ".report.txt"), options: .withoutOverwriting)
         } catch {
             try? fm.removeItem(at: output)
             try? fm.removeItem(at: URL(fileURLWithPath: output.path + ".report.json"))

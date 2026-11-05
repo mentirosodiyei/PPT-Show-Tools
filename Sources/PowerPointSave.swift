@@ -123,14 +123,17 @@ struct PowerPointSave {
         if !saved.closed { warnings.append("PowerPoint could not close the result; it is still open. Close it without saving changes.") }
         var issues: [String] = []
         if saved.slides != openXML.totalSlides { issues.append("PowerPoint saved \(saved.slides) slides; expected \(openXML.totalSlides).") }
-        let checks = try OfficePipeline.verify(inputs: [intermediate], output: output).map {
+        // A result that cannot even be checked is not left behind as if it were valid.
+        let verified: [FileValidation]
+        do { verified = try OfficePipeline.verify(inputs: [intermediate], output: output) } catch { try? fm.removeItem(at: output); throw error }
+        let checks = verified.map {
             FileValidation(file: "Open XML merge → saved by PowerPoint", status: issues.isEmpty ? $0.status : "import_failed_validation", checkedSlides: $0.checkedSlides, slidesWithAnimation: $0.slidesWithAnimation, binaryResourcesChecked: $0.binaryResourcesChecked, checks: $0.checks, issues: issues + $0.issues, needsReview: [
                 "PowerPoint opened and saved the merge; nothing was pasted. Appearance, fonts, editing and playback are not certified.",
                 "PowerPoint reorganises parts and identifiers when saving; the content is compared, not the bytes."
             ])
         }
         let passed = checks.allSatisfy { $0.issues.isEmpty }
-        let report = PowerPointMergeReport(engine: "Deckwright-OpenXML+PowerPoint-AppleEvents-v0.7.0", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
+        let report = PowerPointMergeReport(engine: "Deckwright-OpenXML+PowerPoint-AppleEvents-v0.7.4", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try encoder.encode(report).write(to: URL(fileURLWithPath: output.path + ".report.json"), options: .withoutOverwriting)

@@ -20,6 +20,16 @@ pub fn require_valid_slide_size(size: (i64, i64)) -> Result<()> {
     }
 }
 
+/// A source deck's own size, checked before any arithmetic on it.
+pub fn require_source_size(size: (i64, i64), name: &str) -> Result<()> {
+    let ok = |v: i64| (MIN_SLIDE_EMU..=MAX_SLIDE_EMU).contains(&v);
+    if ok(size.0) && ok(size.1) {
+        Ok(())
+    } else {
+        fail(format!("“{name}” has a slide size outside PowerPoint's limits (1–56 in per side)."))
+    }
+}
+
 /// PowerPoint measures pixels at 96 per inch: 1 px = 9525 EMU.
 pub const EMU_PER_PIXEL: i64 = 9525;
 
@@ -143,7 +153,10 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
     let mut sizes = vec![];
     for (i, d) in docs.iter().enumerate() {
         match slide_size(&d.root) {
-            Some(s) => sizes.push(s),
+            Some(s) => {
+                require_source_size(s, &file_name(&inputs[i]))?;
+                sizes.push(s)
+            }
             None => return fail(format!("Cannot read the slide size of file {}: “{}”.", i + 1, file_name(&inputs[i]))),
         }
     }
@@ -168,13 +181,18 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
     let mut ct = read_xml(&base, "[Content_Types].xml")?;
     let mut warnings = vec!["Direct Open XML engine (PowerPoint is not opened).".to_string(), "Check playback, editing, notes, fonts, external links and OLE objects in PowerPoint.".to_string()];
     warnings.extend(scaling_warnings);
-    let mut next_slide: u64 = docs[0].root.child("sldIdLst").and_then(|l| l.named("sldId").filter_map(|e| e.attr("id").parse::<u64>().ok()).max()).unwrap_or(255) + 1;
+    // ST_SlideId allows 256…2147483647; reject anything that would overflow.
+    let highest_slide = docs[0].root.child("sldIdLst").and_then(|l| l.named("sldId").filter_map(|e| e.attr("id").parse::<u64>().ok()).max()).unwrap_or(255);
+    if highest_slide >= 2147483647 {
+        return fail("Too many slide identifiers to create a valid presentation.");
+    }
+    let mut next_slide: u64 = highest_slide + 1;
     let mut next_master: u64 = 2147483648;
     for d in &docs {
         if let Some(m) = d.root.child("sldMasterIdLst") {
             for e in m.named("sldMasterId") {
                 if let Ok(id) = e.attr("id").parse::<u64>() {
-                    next_master = next_master.max(id + 1);
+                    next_master = next_master.max(id.min(u32::MAX as u64) + 1);
                 }
             }
         }
@@ -185,7 +203,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
             let d = read_xml(&dir.join("ppt").join("slideMasters"), part)?;
             for e in d.root.descendants("sldLayoutId") {
                 if let Ok(id) = e.attr("id").parse::<u64>() {
-                    next_master = next_master.max(id + 1);
+                    next_master = next_master.max(id.min(u32::MAX as u64) + 1);
                 }
             }
         }
@@ -374,7 +392,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
         }
     }
     // ST_SlideId allows 256…2147483647.
-    if next_slide > 2147483648 {
+    if next_slide > 2147483648 || next_master > 4294967296 {
         return fail("Too many slide identifiers to create a valid presentation.");
     }
     write_xml(pres, &base, "ppt/presentation.xml")?;
@@ -388,7 +406,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fit_non_widescreen: bool, fixed:
     let validation = verify(&originals, inputs, &verification, Some(&plan.fit_without_enlarging))?;
     let passed = validation.iter().all(|v| v.issues.is_empty());
     let report = MergeReport {
-        engine: "Deckwright-OpenXML-v0.7.0-windows".into(),
+        engine: "Deckwright-OpenXML-v0.7.4-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         total_slides: counts.iter().sum(),
         slide_counts: counts,

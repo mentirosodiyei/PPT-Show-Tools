@@ -1,6 +1,6 @@
 [package]
 name = "deckwright"
-version = "0.7.3"
+version = "0.7.4"
 edition = "2021"
 description = "Deckwright for Windows: merge presentations, PDF to PowerPoint, resize slides and extract notes"
 build = "build.rs"

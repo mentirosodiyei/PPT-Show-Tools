@@ -2,6 +2,18 @@ import Foundation
 import CryptoKit
 
 func checksum(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+/// SHA-256 of a file read in 1 MiB blocks, so large videos are never held in memory.
+func checksumFile(_ url: URL) throws -> String {
+    let handle = try FileHandle(forReadingFrom: url); defer { try? handle.close() }
+    var hasher = SHA256()
+    while let block = try handle.read(upToCount: 1 << 20), !block.isEmpty { hasher.update(data: block) }
+    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
+}
+/// Typefaces registered in a presentation's embeddedFontLst.
+func embeddedTypefaces(_ root: URL) -> [String] {
+    guard let pres = try? xml(root, "ppt/presentation.xml"), let list = list(pres.rootElement()!, "embeddedFontLst") else { return [] }
+    return children(list, "embeddedFont").compactMap { font in children(font, "font").first.map { attr($0, "typeface") } }
+}
 
 func semantic(_ node: XMLNode?) -> String {
     guard let node else { return "ABSENT" }
@@ -109,6 +121,7 @@ func ownerOfRels(_ file: String) -> String {
 struct PackageSnapshot {
     let slides: [String]; let parts: [String: PartFingerprint]; let notes: [String: String]; let binaries: [String: String]
     let hasVBA: Bool
+    let embeddedFonts: [String]
     let links: [String: [ResourceLink]]
     let slideSize: (Int64, Int64)?
 
@@ -133,7 +146,7 @@ struct PackageSnapshot {
             } else if file.hasPrefix("ppt/notesSlides/"), file.hasSuffix(".xml") {
                 notes[file] = semantic(try xml(root, file).rootElement())
             } else if file.hasPrefix("ppt/media/") || file.hasPrefix("ppt/embeddings/") || file.hasPrefix("ppt/fonts/") {
-                binaries[file] = checksum(try Data(contentsOf: root.appendingPathComponent(file)))
+                binaries[file] = try checksumFile(root.appendingPathComponent(file))
             }
         }
         return PackageSnapshot(
@@ -142,6 +155,7 @@ struct PackageSnapshot {
             notes: notes,
             binaries: binaries,
             hasVBA: FileManager.default.fileExists(atPath: root.appendingPathComponent("ppt/vbaProject.bin").path),
+            embeddedFonts: embeddedTypefaces(root),
             links: links,
             slideSize: slideSize
         )
@@ -170,6 +184,12 @@ struct PackageVerifier {
 
         // Verify ContentTypes coverage and ID uniqueness across the merged package
         var globalIssues: [String] = []
+        if (try? xml(merged, "[Content_Types].xml")) == nil { globalIssues.append("[Content_Types].xml is missing or unreadable in the merged package.") }
+        // Every embedded font of every source must still be registered.
+        var mergedFonts = embeddedTypefaces(merged)
+        for source in sources { for font in source.embeddedFonts {
+            if let i = mergedFonts.firstIndex(of: font) { mergedFonts.remove(at: i) } else { globalIssues.append("Embedded font “\(font)” is not registered in the merged presentation.") }
+        } }
         if let ctRoot = (try? xml(merged, "[Content_Types].xml"))?.rootElement() {
             let defaults = Set(children(ctRoot, "Default").map { attr($0, "Extension").lowercased() })
             let overrides = Set(children(ctRoot, "Override").map { String(attr($0, "PartName").drop(while: { $0 == "/" })) })
@@ -249,7 +269,7 @@ struct PackageVerifier {
                 if try !names.contains(prefix + part) || semantic(xml(merged, prefix + part).rootElement()) != original { issues.append("Notes missing or changed: \(part)") }
             }
             for (part, original) in source.binaries.sorted(by: { $0.key < $1.key }) {
-                if try !names.contains(prefix + part) || checksum(Data(contentsOf: merged.appendingPathComponent(prefix + part))) != original { issues.append("Media, font or embedded object missing or changed: \(part)") }
+                if try !names.contains(prefix + part) || checksumFile(merged.appendingPathComponent(prefix + part)) != original { issues.append("Media, font or embedded object missing or changed: \(part)") }
             }
             issues.append(contentsOf: broken.filter { i == 0 ? !$0.hasPrefix("pptMerger/") : $0.hasPrefix(prefix) }.map { "Broken internal relationship: " + $0 })
             if i == sources.count - 1 && ordered.count != sources.reduce(0, { $0 + $1.slides.count }) { issues.append("The total slide count does not match.") }
@@ -278,7 +298,9 @@ struct PackageVerifier {
         return results
     }
 
-    static func inspect(inputs: [URL], output: URL) throws -> [FileValidation] {
+    /// `fixedSize` and `fit` must match the options the output was merged with,
+    /// so animations are checked against the scaling actually applied.
+    static func inspect(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, fit: Bool = true) throws -> [FileValidation] {
         let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("Deckwright-Check-" + UUID().uuidString)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true); defer { try? fm.removeItem(at: temp) }
         var snapshots: [PackageSnapshot] = []
@@ -288,6 +310,8 @@ struct PackageVerifier {
         }
         let out = temp.appendingPathComponent("out"); try fm.createDirectory(at: out, withIntermediateDirectories: true)
         try extractPackage(output, to: out)
-        return try verify(sources: snapshots, inputs: inputs, merged: out)
+        let sizes = snapshots.compactMap { $0.slideSize }
+        let plan = sizes.count == snapshots.count ? try? planSlideSize(sizes, fixed: fixedSize, fitNonMatching: fit, names: inputs.map { $0.lastPathComponent }) : nil
+        return try verify(sources: snapshots, inputs: inputs, merged: out, fitWithoutEnlarging: plan?.fitWithoutEnlarging)
     }
 }

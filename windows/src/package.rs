@@ -4,7 +4,10 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-pub const MAX_PACKAGE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+/// DECKWRIGHT_MAX_PACKAGE_BYTES lowers the limit for the test suite.
+pub fn max_package_bytes() -> u64 {
+    std::env::var("DECKWRIGHT_MAX_PACKAGE_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(8 * 1024 * 1024 * 1024)
+}
 pub const MAX_PACKAGE_ENTRIES: usize = 100_000;
 
 /// Temporary folder removed when dropped.
@@ -53,7 +56,7 @@ pub fn extract(input: &Path, dir: &Path) -> Result<()> {
         let entry = zip.by_index_raw(i).map_err(|_| invalid())?;
         declared = declared.saturating_add(entry.size());
     }
-    if declared > MAX_PACKAGE_BYTES {
+    if declared > max_package_bytes() {
         return fail(format!("“{name}” is too large or has too many entries to process safely."));
     }
     let mut seen = std::collections::HashSet::new();
@@ -83,10 +86,10 @@ pub fn extract(input: &Path, dir: &Path) -> Result<()> {
         }
         let mut out = fs::OpenOptions::new().write(true).create_new(true).open(&target).or_else(|e| fail(format!("Cannot extract “{name}” ({entry_name}): {e}")))?;
         // Declared sizes can lie; count what is really written.
-        let mut limited = (&mut entry).take(MAX_PACKAGE_BYTES - written + 1);
+        let mut limited = (&mut entry).take(max_package_bytes() - written + 1);
         let copied = std::io::copy(&mut limited, &mut out).or_else(|e| fail(format!("“{name}”: cannot read {entry_name} ({e}).")))?;
         written += copied;
-        if written > MAX_PACKAGE_BYTES {
+        if written > max_package_bytes() {
             return fail(format!("“{name}” is too large or has too many entries to process safely."));
         }
     }
@@ -123,10 +126,13 @@ pub fn zip_dir(root: &Path, output: &Path) -> Result<()> {
     let mut files = package_files(root);
     files.sort_by_key(|f| f != "[Content_Types].xml");
     for part in files {
-        let data = fs::read(crate::xml::part_path(root, &part)).or_else(|e| fail(format!("Cannot read {part}: {e}")))?;
-        let opts = if data.len() as u64 >= 0xFFFF_FFFF { options.large_file(true) } else { options };
+        // Streamed: large videos are never held in memory.
+        let path = crate::xml::part_path(root, &part);
+        let mut source = fs::File::open(&path).or_else(|e| fail(format!("Cannot read {part}: {e}")))?;
+        let size = source.metadata().map(|m| m.len()).unwrap_or(0);
+        let opts = if size >= 0xFFFF_FFFF { options.large_file(true) } else { options };
         zip.start_file(part.as_str(), opts).or_else(|e| fail(format!("Cannot package {part}: {e}")))?;
-        zip.write_all(&data).or_else(|e| fail(format!("Cannot package {part}: {e}")))?;
+        std::io::copy(&mut source, &mut zip).or_else(|e| fail(format!("Cannot package {part}: {e}")))?;
     }
     zip.finish().or_else(|e| fail(format!("Cannot finish the package: {e}")))?.flush().or_else(|e| fail(format!("Cannot save the package: {e}")))?;
     Ok(())
@@ -177,6 +183,22 @@ pub fn read_file(path: &Path) -> Result<Vec<u8>> {
     let mut v = vec![];
     f.read_to_end(&mut v).or_else(|e| fail(format!("Cannot read {}: {e}", path.display())))?;
     Ok(v)
+}
+
+/// SHA-256 of a file read in 1 MiB blocks, so large videos are never held in memory.
+pub fn checksum_file(path: &Path) -> Result<String> {
+    use sha2::{Digest, Sha256};
+    let mut file = fs::File::open(path).or_else(|e| fail(format!("Cannot read {}: {e}", path.display())))?;
+    let mut hasher = Sha256::new();
+    let mut block = vec![0u8; 1 << 20];
+    loop {
+        let n = file.read(&mut block).or_else(|e| fail(format!("Cannot read {}: {e}", path.display())))?;
+        if n == 0 {
+            break;
+        }
+        hasher.update(&block[..n]);
+    }
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 pub fn checksum(data: &[u8]) -> String {

@@ -83,7 +83,7 @@ struct DeckwrightApp: App {
                 let checks = try OfficePipeline.verify(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
             case "--verify" where args.count >= 5:
-                let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
+                let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed, fit: true)
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
             case "--pdf-to-ppt", "--resize", "--to-169", "--extract-notes":
                 guard args.count == 4 else { break }
@@ -97,7 +97,7 @@ struct DeckwrightApp: App {
                     }
                     try printJSON(report); return 0
                 } catch {
-                    let log = PresentationTools.logFailure(input: input, error: error)
+                    let log = PresentationTools.logFailure(output: output, error: error)
                     fputs(error.localizedDescription + "\nLog: " + log + "\n", stderr); return 1
                 }
             case "--merge-powerpoint" where args.count >= 5:

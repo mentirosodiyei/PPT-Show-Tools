@@ -98,7 +98,7 @@ fn run_cli(all: &[String]) -> i32 {
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
             "--verify" if args.len() >= 5 => {
-                let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]))?;
+                let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]), fixed, true)?;
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
@@ -116,7 +116,7 @@ fn run_cli(all: &[String]) -> i32 {
                         Ok(0)
                     }
                     Err(e) => {
-                        let log = tools::log_failure(&input, &e.to_string());
+                        let log = tools::log_failure(&output, &e.to_string());
                         eprintln!("{e}\nLog: {log}");
                         Ok(1)
                     }

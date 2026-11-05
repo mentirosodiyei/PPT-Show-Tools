@@ -47,13 +47,15 @@ struct PresentationTools {
         try fm.copyItem(at:staged,to:output)
         do {try emit(report)} catch {try? fm.removeItem(at:output);try? fm.removeItem(at:URL(fileURLWithPath:report.output+".report.json"));throw error}
     }
-    static func logFailure(input:URL,error:Error) -> String {
-        let log=input.deletingLastPathComponent().appendingPathComponent("Deckwright-ERROR-"+UUID().uuidString+".log")
-        do {try error.localizedDescription.write(to:log,atomically:true,encoding:.utf8);return log.path}
+    /// The error log goes to the folder the user chose for the output, never
+    /// next to the original, and never replaces an existing file.
+    static func logFailure(output:URL,error:Error) -> String {
+        let log=output.deletingLastPathComponent().appendingPathComponent("Deckwright-ERROR-"+UUID().uuidString+".log")
+        do {try Data(error.localizedDescription.utf8).write(to:log,options:.withoutOverwriting);return log.path}
         catch {
             let fallback=fm.temporaryDirectory.appendingPathComponent(log.lastPathComponent)
-            try? error.localizedDescription.write(to:fallback,atomically:true,encoding:.utf8)
-            return "Could not write next to the original. Log written to: "+fallback.path
+            try? Data(error.localizedDescription.utf8).write(to:fallback,options:.withoutOverwriting)
+            return "Could not write next to the output. Log written to: "+fallback.path
         }
     }
     static func pdfToPPT(input:URL,output:URL) throws -> ToolReport {
@@ -200,6 +202,7 @@ struct PresentationTools {
         let root=try temp();defer{try? fm.removeItem(at:root)};try unpack(input,root)
         let before=try PackageSnapshot.capture(root),pres=try xml(root,"ppt/presentation.xml")
         guard let sz=list(pres.rootElement()!,"sldSz"),let w=Int64(attr(sz,"cx")),let h=Int64(attr(sz,"cy")),w>0,h>0 else {try fail("Cannot read the slide size.")}
+        guard (minSlideEMU...maxSlideEMU).contains(w),(minSlideEMU...maxSlideEMU).contains(h) else {try fail("“\(input.lastPathComponent)” has a slide size outside PowerPoint's limits (1–56 in per side).")}
         let target:(Int64,Int64),fit:Bool
         if let fixedSize {
             target=fixedSize;fit=false
@@ -257,7 +260,7 @@ final class SimpleDeck {
         try add(body:body,black:false)
     }
     func addNotes(_ text:String,fontSize:Double,centered:Bool=false) throws {
-        let paragraphs=text.components(separatedBy:"\n").map {line in "<a:p><a:pPr algn=\"\(centered ? "ctr":"l")\"/><a:r><a:rPr lang=\"en-US\" sz=\"\(max(50,Int((fontSize*100).rounded())))\"><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:latin typeface=\"Arial\"/><a:ea typeface=\"Arial\"/><a:cs typeface=\"Arial\"/></a:rPr><a:t xml:space=\"preserve\">\(esc(line))</a:t></a:r><a:endParaRPr sz=\"\(max(50,Int((fontSize*100).rounded())))\"/></a:p>"}.joined()
+        let paragraphs=text.components(separatedBy:"\n").map {line in "<a:p><a:pPr algn=\"\(centered ? "ctr":"l")\"/><a:r><a:rPr lang=\"en-US\" sz=\"\(max(100,Int((fontSize*100).rounded())))\"><a:solidFill><a:srgbClr val=\"FFFFFF\"/></a:solidFill><a:latin typeface=\"Arial\"/><a:ea typeface=\"Arial\"/><a:cs typeface=\"Arial\"/></a:rPr><a:t xml:space=\"preserve\">\(esc(line))</a:t></a:r><a:endParaRPr sz=\"\(max(100,Int((fontSize*100).rounded())))\"/></a:p>"}.joined()
         let body=text.isEmpty ? "":"<p:sp><p:nvSpPr><p:cNvPr id=\"2\" name=\"Notes\"/><p:cNvSpPr txBox=\"1\"/><p:nvPr/></p:nvSpPr><p:spPr><a:xfrm><a:off x=\"457200\" y=\"457200\"/><a:ext cx=\"11277600\" cy=\"5943600\"/></a:xfrm><a:prstGeom prst=\"rect\"><a:avLst/></a:prstGeom><a:noFill/></p:spPr><p:txBody><a:bodyPr wrap=\"square\" lIns=\"0\" rIns=\"0\" tIns=\"0\" bIns=\"0\" anchor=\"ctr\"><a:normAutofit/></a:bodyPr><a:lstStyle/>\(paragraphs)</p:txBody></p:sp>"
         try add(body:body,black:true)
     }

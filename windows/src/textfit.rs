@@ -26,7 +26,7 @@ fn metrics() -> &'static Option<Metrics> {
         let face = ttf_parser::Face::parse(&data, 0).ok()?;
         let upem = face.units_per_em() as f64;
         let mut advances = std::collections::HashMap::new();
-        for code in (0x20u32..0x250).chain(0x2000..0x2070).chain([0x20AC, 0x2122]) {
+        for code in (0x20u32..0x250).chain(0x370..0x530).chain(0x590..0x700).chain(0x2000..0x2070).chain([0x20AC, 0x2122]) {
             if let Some(c) = char::from_u32(code) {
                 if let Some(g) = face.glyph_index(c) {
                     advances.insert(c, face.glyph_hor_advance(g).unwrap_or(0) as f64 / upem);
@@ -38,7 +38,16 @@ fn metrics() -> &'static Option<Metrics> {
     })
 }
 
+/// East Asian wide characters (CJK, kana, hangul, full-width forms) take a full
+/// em; Arial has no glyphs for them, so PowerPoint draws them with a fallback font.
+fn is_wide(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x115F | 0x2E80..=0x303E | 0x3041..=0x33FF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xA000..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x20000..=0x3FFFD)
+}
+
 fn char_width(m: Option<&Metrics>, c: char) -> f64 {
+    if is_wide(c) {
+        return 1.0;
+    }
     match m {
         Some(m) => *m.advances.get(&c).unwrap_or(&if c.is_whitespace() { 0.278 } else { m.fallback }),
         // Conservative estimate when Arial is missing.

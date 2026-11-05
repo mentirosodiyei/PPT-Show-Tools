@@ -447,7 +447,7 @@ impl App {
                 _ => tools::extract_notes(&source, &output),
             };
             let result = result.map_err(|e| {
-                let log = tools::log_failure(&source, &e.to_string());
+                let log = tools::log_failure(&output, &e.to_string());
                 format!("STOPPED: {e}\nLog: {log}")
             });
             let _ = tx.send(Msg::Tool(result));

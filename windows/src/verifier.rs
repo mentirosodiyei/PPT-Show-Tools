@@ -1,5 +1,5 @@
 //! Structural verification of merged packages against their sources.
-use crate::package::{checksum, extract, package_files, read_file, TempDir};
+use crate::package::{checksum_file, extract, package_files, TempDir};
 use crate::scaler;
 use crate::xml::{read_xml, semantic, Element, A_NS};
 use crate::{fail, Result};
@@ -162,6 +162,7 @@ pub struct PackageSnapshot {
     notes: BTreeMap<String, String>,
     binaries: BTreeMap<String, String>,
     has_vba: bool,
+    embedded_fonts: Vec<String>,
     links: BTreeMap<String, Vec<ResourceLink>>,
     slide_size: Option<(i64, i64)>,
 }
@@ -183,7 +184,7 @@ impl PackageSnapshot {
             } else if file.starts_with("ppt/notesSlides/") && file.ends_with(".xml") {
                 notes.insert(file.clone(), semantic(Some(&read_xml(root, &file)?.root)));
             } else if file.starts_with("ppt/media/") || file.starts_with("ppt/embeddings/") || file.starts_with("ppt/fonts/") {
-                binaries.insert(file.clone(), checksum(&read_file(&crate::xml::part_path(root, &file))?));
+                binaries.insert(file.clone(), checksum_file(&crate::xml::part_path(root, &file))?);
             }
         }
         Ok(PackageSnapshot {
@@ -192,6 +193,7 @@ impl PackageSnapshot {
             notes,
             binaries,
             has_vba: crate::xml::part_path(root, "ppt/vbaProject.bin").exists(),
+            embedded_fonts: embedded_typefaces(root),
             links,
             slide_size: size,
         })
@@ -218,6 +220,21 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path, fi
     let merged_pres = read_xml(merged, "ppt/presentation.xml")?;
     let merged_size = slide_size(&merged_pres.root);
     let mut global = vec![];
+    if read_xml(merged, "[Content_Types].xml").is_err() {
+        global.push("[Content_Types].xml is missing or unreadable in the merged package.".into());
+    }
+    // Every embedded font of every source must still be registered.
+    let mut merged_fonts = embedded_typefaces(merged);
+    for source in sources {
+        for font in &source.embedded_fonts {
+            match merged_fonts.iter().position(|f| f == font) {
+                Some(i) => {
+                    merged_fonts.remove(i);
+                }
+                None => global.push(format!("Embedded font “{font}” is not registered in the merged presentation.")),
+            }
+        }
+    }
     if let Ok(ct) = read_xml(merged, "[Content_Types].xml") {
         let defaults: HashSet<String> = ct.root.named("Default").map(|e| e.attr("Extension").to_lowercase()).collect();
         let overrides: HashSet<String> = ct.root.named("Override").map(|e| e.attr("PartName").trim_start_matches('/').to_string()).collect();
@@ -326,7 +343,7 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path, fi
         }
         for (part, original) in &source.binaries {
             let destination = format!("{prefix}{part}");
-            if !names.contains(&destination) || checksum(&read_file(&crate::xml::part_path(merged, &destination))?) != *original {
+            if !names.contains(&destination) || checksum_file(&crate::xml::part_path(merged, &destination))? != *original {
                 issues.push(format!("Media, font or embedded object missing or changed: {part}"));
             }
         }
@@ -364,7 +381,16 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path, fi
     Ok(results)
 }
 
-pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
+/// Typefaces registered in a presentation's embeddedFontLst.
+fn embedded_typefaces(root: &Path) -> Vec<String> {
+    let Ok(pres) = read_xml(root, "ppt/presentation.xml") else { return vec![] };
+    let Some(list) = pres.root.child("embeddedFontLst") else { return vec![] };
+    list.named("embeddedFont").filter_map(|f| f.child("font").map(|x| x.attr("typeface").to_string())).collect()
+}
+
+/// `fixed` and `fit` must match the options the output was merged with, so
+/// animations are checked against the scaling actually applied.
+pub fn inspect(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, fit: bool) -> Result<Vec<FileValidation>> {
     let temp = TempDir::new("Deckwright-Check")?;
     let mut snapshots = vec![];
     for (i, input) in inputs.iter().enumerate() {
@@ -376,5 +402,8 @@ pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>>
     let out = temp.path().join("out");
     std::fs::create_dir_all(&out).or_else(|e| fail(e.to_string()))?;
     extract(output, &out)?;
-    verify(&snapshots, inputs, &out, None)
+    let sizes: Vec<(i64, i64)> = snapshots.iter().filter_map(|s| s.slide_size).collect();
+    let names: Vec<String> = inputs.iter().map(|p| crate::package::file_name(p)).collect();
+    let plan = if sizes.len() == snapshots.len() { crate::merge::plan_slide_size(&sizes, fixed, fit, &names).ok() } else { None };
+    verify(&snapshots, inputs, &out, plan.as_ref().map(|p| p.fit_without_enlarging.as_slice()))
 }

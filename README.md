@@ -61,10 +61,10 @@ Deckwright --extract-notes output.pptx input.pptx
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes
 ```
 
-`DECKWRIGHT_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 40 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer.
+`DECKWRIGHT_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.
 
 ## Status
 

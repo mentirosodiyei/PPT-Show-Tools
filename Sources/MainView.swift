@@ -219,7 +219,7 @@ struct MainView: View {
                 }
                 DispatchQueue.main.async { toolReport = report; busy = false; status = "\(report.pages.count) slides created. Checks passed; review the appearance and the warnings in the report." }
             } catch {
-                let log = PresentationTools.logFailure(input: source, error: error)
+                let log = PresentationTools.logFailure(output: output, error: error)
                 DispatchQueue.main.async { busy = false; status = "STOPPED: " + error.localizedDescription + "\nLog: " + log }
             }
         }
@@ -333,11 +333,11 @@ struct WindowFitter: NSViewRepresentable {
             DispatchQueue.main.async { [weak self] in
                 guard let window = self?.window, let screen = window.screen ?? NSScreen.main else { return }
                 let visible = screen.visibleFrame
-                // Also replace a frame that fills the whole screen height, which only
-                // a restored broken size produces.
                 let pending = UserDefaults.standard.bool(forKey: WindowFitter.resetPendingKey)
                 UserDefaults.standard.removeObject(forKey: WindowFitter.resetPendingKey)
-                guard pending || !visible.contains(window.frame) || window.frame.height >= visible.height - 1 else { return }
+                // A maximised or full-screen window is the user's choice; only an
+                // off-screen frame or the one-time reset is corrected.
+                guard !window.styleMask.contains(.fullScreen), pending || !visible.intersects(window.frame) || window.frame.height > visible.height + 1 else { return }
                 let size = NSSize(width: min(850, visible.width), height: min(650 + window.frame.height - window.contentLayoutRect.height, visible.height))
                 window.setFrame(NSRect(x: visible.midX - size.width / 2, y: visible.midY - size.height / 2, width: size.width, height: size.height), display: true)
             }

@@ -84,4 +84,7 @@ Section "Uninstall"
   Delete "$DESKTOP\Deckwright.lnk"
   DeleteRegKey HKCU "Software\Microsoft\Windows\CurrentVersion\Uninstall\Deckwright"
   DeleteRegKey HKCU "Software\Deckwright"
+  ; Settings saved by the app (slide size).
+  Delete "$APPDATA\Deckwright\settings.json"
+  RMDir "$APPDATA\Deckwright"
 SectionEnd

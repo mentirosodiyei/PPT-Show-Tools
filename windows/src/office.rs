@@ -1,6 +1,6 @@
 //! Semantic verification for packages re-saved by PowerPoint, which renames
 //! parts and relationship IDs: compare ordered slide features, not ZIP paths.
-use crate::package::{checksum, extension, extract, file_name, read_file, zip_dir, TempDir};
+use crate::package::{checksum_file, extension, extract, file_name, zip_dir, TempDir};
 use crate::verifier::{ordered_parts, resolve_part, slide_size, FileValidation, PartFingerprint};
 use crate::xml::{read_xml, Document, Element};
 use crate::{fail, scaler, Error, Result};
@@ -41,6 +41,7 @@ pub fn prepare(inputs: &[PathBuf], destination: &Path, fit: bool) -> Result<Offi
         extract(input, &root)?;
         let doc = read_xml(&root, "ppt/presentation.xml")?;
         let Some(size) = slide_size(&doc.root).filter(|_| doc.root.ns == crate::xml::P_NS) else { return fail(format!("Cannot read the size of {}", file_name(input))) };
+        crate::merge::require_source_size(size, &file_name(input))?;
         if !scaler::is_widescreen(size) && !fit {
             return Err(Error::FormatChoice(format!("{} is not 16:9. Choose to fit it without enlarging, or change it yourself.", file_name(input))));
         }
@@ -130,7 +131,7 @@ fn media(root: &Path, slides: &[String]) -> Result<HashSet<String>> {
         }
         let lower = owner.to_lowercase();
         if lower.contains("/media/") || lower.contains("/embeddings/") {
-            hashes.insert(checksum(&read_file(&path)?));
+            hashes.insert(checksum_file(&path)?);
         }
         let rel = rels_of(&owner);
         if crate::xml::part_path(root, &rel).exists() {
