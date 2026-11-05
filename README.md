@@ -28,13 +28,13 @@ The checks are structural. They do not certify visual fidelity, playback, fonts 
 
 ## Building
 
-**macOS** (Swift/SwiftUI, macOS 14+, universal: Apple Silicon and Intel):
+**macOS** (Swift/SwiftUI, macOS 14+), as two separate apps:
 
 ```sh
-./build.sh            # → dist/Deckwright.app and dist/Deckwright-<version>.dmg
+./build.sh   # → dist/Deckwright-<version>-AppleSilicon.dmg (arm64) and dist/Deckwright-<version>-Intel.dmg (x86_64)
 ```
 
-The DMG holds the app and a link to Applications: open it and drag Deckwright onto Applications.
+The Apple Silicon app contains no Intel code, so it never runs through Rosetta, which macOS 28 removes. Intel Macs are supported up to macOS 26. Each DMG holds the app and a link to Applications: open it and drag Deckwright onto Applications.
 
 **Windows** (Rust, built on the Mac with `cargo-xwin` and NSIS):
 
