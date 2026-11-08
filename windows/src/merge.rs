@@ -190,7 +190,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             // Each presentation is adapted on its own before the merge.
             let notes = scaler::normalize(&roots[i], &mut docs[i], sizes[i], target)?;
             scaling_warnings.extend(notes.iter().map(|n| format!("{}: {n}", names[i])));
-            let adapted = if scaler::same_aspect(sizes[i], target) { "scaled proportionally" } else { "adapted to the new proportion: nothing is stretched; text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours, videos keep their proportion over a blurred copy of themselves, other objects keep their place" };
+            let adapted = if scaler::same_aspect(sizes[i], target) { "scaled proportionally" } else { "content scaled as a whole and centred, design unchanged; the background extends into the new margins (photos with their own colours, videos with a blurred copy)" };
             scaling_warnings.push(format!("{}: {} → {}; {adapted}.", names[i], describe_size(sizes[i]), describe_size(target)));
         }
     }

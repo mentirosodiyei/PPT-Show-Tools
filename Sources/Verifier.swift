@@ -92,6 +92,17 @@ struct PartFingerprint {
         timingTargetIDs = targetIDs
     }
 
+    /// The timing a resize from `sourceSize` to `targetSize` produces: animation
+    /// coordinates mapped into the centred, scaled content (see SlideScaler).
+    func expectedTiming(from sourceSize: (Int64, Int64)?, to targetSize: (Int64, Int64)?) -> String {
+        guard let timingNode, let s = sourceSize, let t = targetSize, s != t else { return timing }
+        let factor = min(Double(t.0) / Double(s.0), Double(t.1) / Double(s.1))
+        let rx = Double(s.0) * factor / Double(t.0), ry = Double(s.1) * factor / Double(t.1)
+        guard abs(rx - 1) > 1e-9 || abs(ry - 1) > 1e-9, let copy = timingNode.copy() as? XMLElement else { return timing }
+        SlideScaler.scaleTimingAnimations(copy, rx: rx, ry: ry, shiftXNorm: (Double(t.0) - Double(s.0) * factor) / 2 / Double(t.0), shiftYNorm: (Double(t.1) - Double(s.1) * factor) / 2 / Double(t.1))
+        return semantic(copy)
+    }
+
 }
 
 struct ResourceLink {
@@ -161,6 +172,7 @@ struct PackageVerifier {
         var broken: [String] = []
 
         let mergedPres = try xml(merged, "ppt/presentation.xml")
+        let mergedSize: (Int64, Int64)? = mergedPres.rootElement().flatMap { list($0, "sldSz") }.flatMap { sz in Int64(attr(sz, "cx")).flatMap { w in Int64(attr(sz, "cy")).map { (w, $0) } } }
 
         // Verify ContentTypes coverage and ID uniqueness across the merged package
         var globalIssues: [String] = []
@@ -224,7 +236,7 @@ struct PackageVerifier {
                 let imported = try PartFingerprint(xml(merged, destination).rootElement()!)
                 let number = source.slides.firstIndex(of: part).map { "slide \($0 + 1)" } ?? part
                 // Animation coordinates are fractions of the slide: resizing keeps them.
-                if original.timing != imported.timing { issues.append("\(number): animation/timing does not match the original (missing or changed).") }
+                if original.expectedTiming(from: source.slideSize, to: mergedSize) != imported.timing { issues.append("\(number): animation/timing does not match the original (missing or changed).") }
                 if original.transition != imported.transition { issues.append("\(number): transition or automatic advance missing/changed.") }
                 if original.text != imported.text { issues.append("\(number): text missing or changed.") }
                 if original.shapeIdentity != imported.shapeIdentity { issues.append("\(number): objects, identifiers or interactive actions missing/changed.") }

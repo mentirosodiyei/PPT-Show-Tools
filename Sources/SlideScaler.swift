@@ -12,19 +12,13 @@ struct SlideScaler {
         abs((Double(a.0) / Double(a.1)) / (Double(b.0) / Double(b.1)) - 1) <= 0.001
     }
 
-    /// Adapts every slide, layout and master to a new size without distorting
-    /// anything and without leaving empty bands:
-    /// - text, pictures, charts, tables and groups keep their proportions, scaled
-    ///   by s = min(sx, sy), the factor that fits the old page in the new one;
-    /// - text boxes, placeholders and connectors take the new proportion (their
-    ///   text reflows at the scaled font size);
-    /// - shapes spanning the page keep spanning it; pictures spanning it and picture
-    ///   backgrounds are never cropped or stretched: they are shown whole, and the
-    ///   new margins take the colours of the picture's edges (see PicturePadding);
-    /// - other objects keep their place relative to the nearest edge, or to the
-    ///   centre when they sit in the middle third.
-    /// When the proportion does not change this is plain proportional scaling.
-    /// Animation coordinates are fractions of the slide, so they stay valid.
+    /// Resizes every slide, layout and master without changing the design: the
+    /// whole page is scaled by s = min(sx, sy) and centred; nothing moves relative
+    /// to anything else and nothing is stretched or cropped. Only the background
+    /// grows into the new margins (picture backgrounds and pictures filling the
+    /// page with their own edge colours, videos with a blurred copy). Animation
+    /// coordinates are mapped into the centred content. When the proportion does
+    /// not change this is plain proportional scaling.
     /// Returns notes for the report (videos that got a still instead of a moving background).
     @discardableResult
     static func normalize(package: URL, presentation: XMLDocument, from size: (Int64, Int64), to target: (Int64, Int64)) throws -> [String] {
@@ -53,10 +47,14 @@ struct SlideScaler {
                     if !sameAspect(size, target) { videos = VideoBackdrop.spanningVideos(tree, width: page.width, height: page.height) }
                 }
                 if !page.isUnit { try scale(document, factor: page.s, isMaster: isMaster) }
-                for frame in frames { page.place(frame) { part.pad(pad, $0, $1, $2) } }
+                for frame in frames { page.place(frame) { part.pad(pad, $0, $1) } }
+                if ["slides", "slideLayouts", "slideMasters"].contains(folder), let root = document.rootElement() {
+                    let (dx, dy) = page.offset
+                    scaleTimingAnimations(root, rx: page.width * page.s / page.newWidth, ry: page.height * page.s / page.newHeight, shiftXNorm: dx / page.newWidth, shiftYNorm: dy / page.newHeight)
+                }
                 if let root = document.rootElement(), let bg = try root.nodes(forXPath: ".//*[local-name() = 'bgPr']/*[local-name() = 'blipFill']").first as? XMLElement {
                     // A picture background always fills the slide: show it whole in the new proportion.
-                    if !part.pad(pad, bg, page.sx, page.sy) { PicturePadding.insetFill(bg, page.sx, page.sy) }
+                    if !part.pad(pad, bg, PicturePadding.centred(page.sx, page.sy)) { PicturePadding.insetFill(bg, page.sx, page.sy) }
                 }
                 if !videos.isEmpty {
                     notes += VideoBackdrop.addBackdrops(package: package, document: document, ids: videos, slide: (page.newWidth, page.newHeight), part: part, pad: pad)
@@ -109,39 +107,25 @@ struct SlideScaler {
             width = Double(from.0); height = Double(from.1); newWidth = Double(to.0); newHeight = Double(to.1)
             sx = newWidth / width; sy = newHeight / height; s = min(sx, sy)
         }
-        /// New start and length on one axis.
-        func axis(start: Double, length: Double, page: Double, newPage: Double, factor: Double, stretch: Bool) -> (Double, Double) {
-            if stretch { return (start * factor, length * factor) }
-            let size = length * s, centre = (start + length / 2) / page
-            var position: Double
-            if centre < 1.0 / 3 { position = start * s }                                   // near the start edge
-            else if centre > 2.0 / 3 { position = newPage - (page - start - length) * s - size } // near the end edge
-            else { position = centre * newPage - size / 2 }                                // middle third: keep centred
-            if start >= 0 && start + length <= page { position = min(max(position, 0), max(newPage - size, 0)) }
-            return (position, size)
-        }
-        func place(_ f: ShapeFrame, pad: (XMLElement, Double, Double) -> Bool) {
+        /// Offset that centres the scaled page in the new one (one of them is 0).
+        var offset: (Double, Double) { ((newWidth - width * s) / 2, (newHeight - height * s) / 2) }
+        /// Every object keeps its place on the page: the whole page is scaled by s
+        /// and centred, so nothing moves relative to anything else. Only pictures
+        /// that fill the page are extended into the new margins (with their own
+        /// colours, see PicturePadding); videos stay as they are (see VideoBackdrop).
+        func place(_ f: ShapeFrame, pad: (XMLElement, [Double]) -> Bool) {
+            let (dx, dy) = offset
+            var (x, y, w, h) = (f.x * s + dx, f.y * s + dy, f.cx * s, f.cy * s)
             let picture = f.kind == "pic" || (f.kind == "sp" && list(f.shape, "spPr").flatMap { list($0, "blipFill") } != nil)
-            let text = f.kind == "sp" && !picture && ((try? f.shape.nodes(forXPath: ".//*[local-name() = 'ph']"))?.isEmpty == false || (try? f.shape.nodes(forXPath: ".//*[local-name() = 't']"))?.contains { !($0.stringValue ?? "").isEmpty } == true)
-            let spansX = f.cx >= 0.9 * width, spansY = f.cy >= 0.9 * height
-            var stretchX: Bool, stretchY: Bool
-            switch f.kind {
-            case "cxnSp": (stretchX, stretchY) = (true, true)
-            case "sp" where text: (stretchX, stretchY) = (true, true)
-            // Videos are never reshaped: they keep their proportion (see VideoBackdrop).
-            case "pic" where VideoBackdrop.isVideo(f.shape): (stretchX, stretchY) = (false, false)
-            case "sp", "pic": (stretchX, stretchY) = (spansX, spansY)
-            default: (stretchX, stretchY) = (false, false)  // groups, charts, tables, SmartArt: rigid
-            }
-            // A picture that would change shape is padded to its new proportion; if
-            // that is not possible it keeps its own proportion instead (never cropped).
-            if picture && (stretchX || stretchY) {
-                let gx = stretchX ? sx : s, gy = stretchY ? sy : s
+            let fillsPage = f.cx >= 0.9 * width && f.cy >= 0.9 * height
+            if picture && fillsPage && !VideoBackdrop.isVideo(f.shape) && w > 0 && h > 0 && (dx > 0.5 || dy > 0.5) {
+                // Extend to the edges of the new page on the axis that gained margins.
+                let (x0, x1) = dx > 0.5 ? (min(x, 0), max(x + w, newWidth)) : (x, x + w)
+                let (y0, y1) = dy > 0.5 ? (min(y, 0), max(y + h, newHeight)) : (y, y + h)
+                let sides = [(x - x0) / w, (x1 - x - w) / w, (y - y0) / h, (y1 - y - h) / h]
                 let fill = f.kind == "pic" ? list(f.shape, "blipFill") : list(f.shape, "spPr").flatMap { list($0, "blipFill") }
-                if !(f.cx > 0 && f.cy > 0 && fill.map { pad($0, gx, gy) } == true) { (stretchX, stretchY) = (false, false) }
+                if let fill, pad(fill, sides) { (x, y, w, h) = (x0, y0, x1 - x0, y1 - y0) }
             }
-            let (x, w) = axis(start: f.x, length: f.cx, page: width, newPage: newWidth, factor: sx, stretch: stretchX)
-            let (y, h) = axis(start: f.y, length: f.cy, page: height, newPage: newHeight, factor: sy, stretch: stretchY)
             set(f.off, "x", String(Int64(x.rounded()))); set(f.off, "y", String(Int64(y.rounded())))
             set(f.ext, "cx", String(Int64(w.rounded()))); set(f.ext, "cy", String(Int64(h.rounded())))
         }

@@ -24,19 +24,16 @@ fn xml_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
     }
 }
 
-/// Adapts every slide, layout and master to a new size without distorting
-/// anything and without leaving empty bands:
-/// - text, pictures, charts, tables and groups keep their proportions, scaled
-///   by s = min(sx, sy), the factor that fits the old page in the new one;
-/// - text boxes, placeholders and connectors take the new proportion (their
-///   text reflows at the scaled font size);
-/// - shapes spanning the page keep spanning it; pictures spanning it and picture
-///   backgrounds are never cropped or stretched: they are shown whole, and the
-///   new margins take the colours of the picture's edges (see `padding`);
-/// - other objects keep their place relative to the nearest edge, or to the
-///   centre when they sit in the middle third.
+/// Resizes every slide, layout and master without changing the design: the
+/// whole page is scaled by s = min(sx, sy), the factor that fits the old page
+/// in the new one, and centred; nothing moves relative to anything else and
+/// nothing is stretched or cropped. Only the background grows into the new
+/// margins: plain and gradient backgrounds cover them by themselves, picture
+/// backgrounds and pictures filling the page are extended with their own edge
+/// colours (see `padding`), and videos filling the page get a blurred copy
+/// behind them (see `video`).
 /// When the proportion does not change this is plain proportional scaling.
-/// Animation coordinates are fractions of the slide, so they stay valid.
+/// Animation coordinates are mapped into the centred content (see `scale_timing_animations`).
 /// Returns notes for the report (videos that got a still instead of a moving background).
 pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), to: (i64, i64)) -> Result<Vec<String>> {
     if from == to {
@@ -74,14 +71,19 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
             if layout_part {
                 if let Some(tree) = doc.root.first_descendant_mut("spTree") {
                     let mut next = frames.into_iter();
-                    place_frames(tree, &page, &mut next, &mut |fill, gx, gy| part.pad(&mut pad, fill, gx, gy));
+                    place_frames(tree, &page, &mut next, &mut |fill, sides| part.pad(&mut pad, fill, sides));
                 }
                 // A picture background always fills the slide: show it whole in the new proportion.
                 if let Some(bg) = doc.root.first_descendant_mut("bgPr").and_then(|b| b.child_mut("blipFill")) {
-                    if !part.pad(&mut pad, bg, page.sx, page.sy) {
+                    if !part.pad(&mut pad, bg, crate::padding::centred(page.sx, page.sy)) {
                         crate::padding::inset_fill(bg, page.sx, page.sy);
                     }
                 }
+            }
+            if layout_part {
+                let (dx, dy) = page.offset();
+                let (rx, ry) = (page.width * page.s / page.new_width, page.height * page.s / page.new_height);
+                scale_timing_animations(&mut doc.root, rx, ry, dx / page.new_width, dy / page.new_height);
             }
             if !videos.is_empty() {
                 notes.extend(crate::video::add_backdrops(package, &mut doc, &videos, (page.new_width, page.new_height), &mut part, &mut pad));
@@ -141,7 +143,7 @@ fn collect_frames(container: &Element, frames: &mut Vec<Option<Frame>>) {
 }
 
 /// Visits the same objects in the same order as `collect_frames`.
-type PadFn<'a> = dyn FnMut(&mut Element, f64, f64) -> bool + 'a;
+type PadFn<'a> = dyn FnMut(&mut Element, [f64; 4]) -> bool + 'a;
 
 fn place_frames(container: &mut Element, page: &Adaptation, frames: &mut std::vec::IntoIter<Option<Frame>>, pad: &mut PadFn) {
     for shape in container.elems_mut() {
@@ -177,50 +179,30 @@ impl Adaptation {
     fn is_unit(&self) -> bool {
         (self.s - 1.0).abs() < 1e-9
     }
-    /// New start and length on one axis.
-    fn axis(&self, start: f64, length: f64, page: f64, new_page: f64, factor: f64, stretch: bool) -> (f64, f64) {
-        if stretch {
-            return (start * factor, length * factor);
-        }
-        let size = length * self.s;
-        let centre = (start + length / 2.0) / page;
-        let mut position = if centre < 1.0 / 3.0 {
-            start * self.s // near the start edge
-        } else if centre > 2.0 / 3.0 {
-            new_page - (page - start - length) * self.s - size // near the end edge
-        } else {
-            centre * new_page - size / 2.0 // middle third: keep centred
-        };
-        if start >= 0.0 && start + length <= page {
-            position = position.max(0.0).min((new_page - size).max(0.0));
-        }
-        (position, size)
+    /// Offset that centres the scaled page in the new one (one of them is 0).
+    fn offset(&self) -> (f64, f64) {
+        ((self.new_width - self.width * self.s) / 2.0, (self.new_height - self.height * self.s) / 2.0)
     }
+    /// Every object keeps its place on the page: the whole page is scaled by s
+    /// and centred, so nothing moves relative to anything else. Only pictures
+    /// that fill the page are extended into the new margins (with their own
+    /// colours, see `padding`); videos stay as they are (see `video`).
     fn place(&self, shape: &mut Element, f: Frame, pad: &mut PadFn) {
         let kind = shape.local().to_string();
+        let (dx, dy) = self.offset();
+        let (mut x, mut y, mut w, mut h) = (f.x * self.s + dx, f.y * self.s + dy, f.cx * self.s, f.cy * self.s);
         let picture = kind == "pic" || (kind == "sp" && shape.child("spPr").and_then(|p| p.child("blipFill")).is_some());
-        let text = kind == "sp" && !picture && (!shape.descendants("ph").is_empty() || shape.descendants("t").iter().any(|t| !t.text().is_empty()));
-        let (spans_x, spans_y) = (f.cx >= 0.9 * self.width, f.cy >= 0.9 * self.height);
-        let (mut stretch_x, mut stretch_y) = match kind.as_str() {
-            "cxnSp" => (true, true),
-            "sp" if text => (true, true),
-            // Videos are never reshaped: they keep their proportion (see `video`).
-            "pic" if crate::video::is_video(shape) => (false, false),
-            "sp" | "pic" => (spans_x, spans_y),
-            _ => (false, false), // groups, charts, tables, SmartArt: rigid
-        };
-        // A picture that would change shape is padded to its new proportion; if
-        // that is not possible it keeps its own proportion instead (never cropped).
-        if picture && (stretch_x || stretch_y) {
-            let gx = if stretch_x { self.sx } else { self.s };
-            let gy = if stretch_y { self.sy } else { self.s };
+        let fills_page = f.cx >= 0.9 * self.width && f.cy >= 0.9 * self.height;
+        if picture && fills_page && !crate::video::is_video(shape) && w > 0.0 && h > 0.0 && (dx > 0.5 || dy > 0.5) {
+            // Extend to the edges of the new page on the axis that gained margins.
+            let (x0, x1) = if dx > 0.5 { (x.min(0.0), (x + w).max(self.new_width)) } else { (x, x + w) };
+            let (y0, y1) = if dy > 0.5 { (y.min(0.0), (y + h).max(self.new_height)) } else { (y, y + h) };
+            let sides = [(x - x0) / w, (x1 - x - w) / w, (y - y0) / h, (y1 - y - h) / h];
             let fill = if kind == "pic" { shape.child_mut("blipFill") } else { shape.child_mut("spPr").and_then(|p| p.child_mut("blipFill")) };
-            if !(f.cx > 0.0 && f.cy > 0.0 && fill.is_some_and(|fill| pad(fill, gx, gy))) {
-                (stretch_x, stretch_y) = (false, false);
+            if fill.is_some_and(|fill| pad(fill, sides)) {
+                (x, y, w, h) = (x0, y0, x1 - x0, y1 - y0);
             }
         }
-        let (x, w) = self.axis(f.x, f.cx, self.width, self.new_width, self.sx, stretch_x);
-        let (y, h) = self.axis(f.y, f.cy, self.height, self.new_height, self.sy, stretch_y);
         let holder = if kind == "graphicFrame" || kind == "contentPart" {
             Some(&mut *shape)
         } else if shape.child("spPr").is_some() {
@@ -240,6 +222,161 @@ impl Adaptation {
         }
     }
 }
+
+/// Animation coordinates are fractions of the slide. The content now fills a
+/// centred block of the new slide, so they are mapped into that block: scaled
+/// by (rx, ry) = block size / slide size and moved by (sx, sy) = block offset /
+/// slide size, so every movement covers the same part of the content as before.
+pub fn scale_timing_animations(root: &mut Element, rx: f64, ry: f64, sx: f64, sy: f64) {
+    if (rx - 1.0).abs() <= 1e-9 && (ry - 1.0).abs() <= 1e-9 {
+        return;
+    }
+    // Motion paths (origin="parent" absolute commands also shift).
+    for_each_descendant_mut(root, "animMotion", &mut |motion| {
+        let origin_parent = motion.attr("origin") == "parent";
+        if let Some(path) = motion.attr_mut("path") {
+            if !path.is_empty() {
+                *path = scale_motion_path(path, rx, ry, sx, sy, origin_parent);
+            }
+        }
+    });
+    for_each_descendant_mut(root, "anim", &mut |anim| {
+        let names: Vec<String> = anim.descendants("attrName").iter().map(|e| e.text().trim().to_string()).collect();
+        let has = |a: &str, b: &str| names.iter().any(|n| n == a || n == b);
+        let (is_x, is_y, is_w, is_h) = (has("ppt_x", "style.left"), has("ppt_y", "style.top"), has("ppt_w", "style.width"), has("ppt_h", "style.height"));
+        for_each_descendant_mut(anim, "tav", &mut |tav| {
+            let has_formula = tav.has_attr("fmla");
+            if let Some(f) = tav.attr_mut("fmla") {
+                let fmla = f.clone();
+                if (is_x || fmla.contains("ppt_x")) && (rx - 1.0).abs() > 1e-9 {
+                    *f = scale_formula_offsets(&fmla, "ppt_x", rx, sx);
+                } else if (is_y || fmla.contains("ppt_y")) && (ry - 1.0).abs() > 1e-9 {
+                    *f = scale_formula_offsets(&fmla, "ppt_y", ry, sy);
+                } else if (is_w || fmla.contains("ppt_w")) && (rx - 1.0).abs() > 1e-9 {
+                    *f = scale_formula_offsets(&fmla, "ppt_w", rx, 0.0);
+                } else if (is_h || fmla.contains("ppt_h")) && (ry - 1.0).abs() > 1e-9 {
+                    *f = scale_formula_offsets(&fmla, "ppt_h", ry, 0.0);
+                }
+            }
+            if !has_formula {
+                for_each_descendant_mut(tav, "fltVal", &mut |flt| {
+                    if let Some(v) = flt.attr_mut("val") {
+                        if let Ok(n) = v.parse::<f64>() {
+                            if is_x {
+                                *v = format_coord(n * rx + sx)
+                            } else if is_y {
+                                *v = format_coord(n * ry + sy)
+                            } else if is_w {
+                                *v = format_coord(n * rx)
+                            } else if is_h {
+                                *v = format_coord(n * ry)
+                            }
+                        }
+                    }
+                });
+            }
+        });
+    });
+}
+
+/// Calls `f` on every descendant (not `e` itself) named `local`, outermost first,
+/// without descending into a matched element (its own matches are handled by `f`).
+fn for_each_descendant_mut(e: &mut Element, local: &str, f: &mut dyn FnMut(&mut Element)) {
+    for c in e.elems_mut() {
+        if c.local() == local {
+            f(c);
+        } else {
+            for_each_descendant_mut(c, local, f);
+        }
+    }
+}
+
+pub fn scale_formula_offsets(fmla: &str, variable: &str, factor: f64, shift: f64) -> String {
+    let trimmed = fmla.trim_matches(|c| c == ' ' || c == '\t');
+    if !trimmed.contains(variable) {
+        return if shift.abs() > 1e-9 { format!("({trimmed})*{}+{}", format_coord(factor), format_coord(shift)) } else { format!("({trimmed})*{}", format_coord(factor)) };
+    }
+    let pattern = format!(r"^({})\s*([+-])\s*([0-9]+(?:\.[0-9]+)?)$", regex::escape(variable));
+    if let Some(c) = regex::Regex::new(&pattern).ok().and_then(|r| r.captures(trimmed)) {
+        if let Ok(n) = c[3].parse::<f64>() {
+            return format!("{variable}{}{}", &c[2], format_coord(n * factor));
+        }
+    }
+    fmla.to_string()
+}
+
+pub fn scale_motion_path(path: &str, rx: f64, ry: f64, sx: f64, sy: f64, origin_parent: bool) -> String {
+    let mut tokens: Vec<String> = vec![];
+    let mut current = String::new();
+    for ch in path.chars() {
+        if ch.is_whitespace() || ch == ',' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+        } else if ch.is_alphabetic() && ch != 'e' && ch != 'E' {
+            if !current.is_empty() {
+                tokens.push(std::mem::take(&mut current));
+            }
+            tokens.push(ch.to_string());
+        } else if ch == 'e' || ch == 'E' {
+            if current.chars().last().map(|l| l.is_numeric() || l == '.').unwrap_or(false) {
+                current.push(ch);
+            } else {
+                if !current.is_empty() {
+                    tokens.push(std::mem::take(&mut current));
+                }
+                tokens.push(ch.to_string());
+            }
+        } else {
+            current.push(ch);
+        }
+    }
+    if !current.is_empty() {
+        tokens.push(current);
+    }
+    let mut out = vec![];
+    let mut command = 'M';
+    let mut index = 0;
+    for token in tokens {
+        let mut chars = token.chars();
+        if let (Some(c), None) = (chars.next(), chars.next()) {
+            if c.is_alphabetic() {
+                command = c;
+                index = 0;
+                out.push(token);
+                continue;
+            }
+        }
+        if let Ok(v) = token.parse::<f64>() {
+            let absolute = origin_parent && command.is_uppercase();
+            let scaled = if index % 2 == 0 { v * rx + if absolute { sx } else { 0.0 } } else { v * ry + if absolute { sy } else { 0.0 } };
+            out.push(format_coord(scaled));
+            index += 1;
+        } else {
+            out.push(token);
+        }
+    }
+    out.join(" ")
+}
+
+pub fn format_coord(value: f64) -> String {
+    if value.abs() < 1e-12 {
+        return "0".into();
+    }
+    let rounded = (value * 1_000_000.0).round() / 1_000_000.0;
+    if (rounded - rounded.round()).abs() < 1e-9 {
+        return (rounded.round() as i64).to_string();
+    }
+    let mut s = format!("{rounded:.6}");
+    while s.ends_with('0') {
+        s.pop();
+    }
+    if s.ends_with('.') {
+        s.pop();
+    }
+    s
+}
+
 
 fn length(node: &mut Element, attribute: &str, factor: f64) {
     if let Some(v) = node.attr_mut(attribute) {

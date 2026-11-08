@@ -58,7 +58,7 @@ class SlideSize(unittest.TestCase):
             report = json.loads(Path(str(o) + '.report.json').read_text())
             self.assertTrue(all(not v['issues'] for v in report['validation']))
 
-    def test_fixed_size_adapts_full_slide_shapes(self):
+    def test_fixed_size_centres_the_content(self):
         with tempfile.TemporaryDirectory() as d:
             d = Path(d); a, b, o = d / 'a.pptx', d / 'b.pptx', d / 'o.pptx'
             deck(a, 12192000, 6858000, motion=True); deck(b, 12192000, 6858000)
@@ -66,8 +66,8 @@ class SlideSize(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             tw, th = 4800 * PX, 1344 * PX
             self.assertEqual(size_of(o), (tw, th))
-            # A shape covering the slide keeps covering it, with no empty bands.
-            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (0, 0, tw, th))
+            # The 16:9 page is scaled to the new height and centred; shapes are not stretched.
+            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (11480800, 0, 22758400, 12801600))
             report = json.loads(Path(str(o) + '.report.json').read_text())
             self.assertTrue(all(not v['issues'] for v in report['validation']), report['validation'])
 
@@ -90,7 +90,7 @@ class SlideSize(unittest.TestCase):
             r = run('--resize', '--size', '1920x1080', o, a)
             self.assertEqual(r.returncode, 0, r.stderr)
             self.assertEqual(size_of(o), (18288000, 10287000))
-            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (0, 0, 18288000, 10287000))
+            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (2286000, 0, 13716000, 10287000))
             again = run('--resize', '--size', '1920x1080', d / 'o2.pptx', o)
             self.assertNotEqual(again.returncode, 0)
             self.assertIn('already', again.stderr)
@@ -103,7 +103,8 @@ class SlideSize(unittest.TestCase):
             self.assertEqual(r.returncode, 0, r.stderr)
             w, h = size_of(o)
             self.assertEqual(w * 9, h * 16)
-            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (0, 0, w, h))
+            s = min(w / 9144000, h / 6858000)
+            self.assertEqual(box(o, 'ppt/slides/slide1.xml'), (round((w - 9144000 * s) / 2), round((h - 6858000 * s) / 2), round(9144000 * s), round(6858000 * s)))
 
     def test_sizes_outside_powerpoint_limits_are_refused(self):
         with tempfile.TemporaryDirectory() as d:

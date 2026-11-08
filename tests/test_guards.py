@@ -14,7 +14,7 @@ def fixture(path,width=12192000,height=6858000):
   z.writestr('[Content_Types].xml','<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"><Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Override PartName="/ppt/presentation.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/><Override PartName="/ppt/slides/slide1.xml" ContentType="application/vnd.openxmlformats-officedocument.presentationml.slide+xml"/></Types>')
   z.writestr('ppt/slides/slide1.xml','<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"><p:cSld><p:spTree/></p:cSld></p:sld>')
 class Guards(unittest.TestCase):
- def test_mixed_proportions_are_adapted_and_sources_unchanged(self):
+ def test_mixed_proportions_are_resized_and_sources_unchanged(self):
   import json
   with tempfile.TemporaryDirectory() as d:
    a,b,o=[Path(d)/x for x in ['a.pptx','b.pptx','out.pptx']];fixture(a,12192000,6858000);fixture(b,9144000,6858000)
@@ -22,7 +22,7 @@ class Guards(unittest.TestCase):
    self.assertEqual(r.returncode,0,r.stderr.decode());self.assertEqual(before,(a.read_bytes(),b.read_bytes()))
    with zipfile.ZipFile(o) as z:self.assertIn(b'cx="12192000" cy="6858000"',z.read('ppt/presentation.xml'))
    warnings=json.loads(Path(str(o)+'.report.json').read_text())['warnings']
-   self.assertTrue(any('b.pptx: 960 × 720 px (25.40 × 19.05 cm)' in w and 'adapted to the new proportion' in w for w in warnings),warnings)
+   self.assertTrue(any('b.pptx: 960 × 720 px (25.40 × 19.05 cm)' in w and 'design unchanged' in w for w in warnings),warnings)
  def test_alt_text_whitespace_survives_normalization(self):
   import xml.etree.ElementTree as E
   with tempfile.TemporaryDirectory() as d:
@@ -133,7 +133,7 @@ class Guards(unittest.TestCase):
      r=subprocess.run([str(BIN),'--verify',str(bad),str(a),str(b)],capture_output=True)
      self.assertEqual(r.returncode,2,r.stderr.decode());checks=json.loads(r.stdout)
      self.assertTrue(checks[1]['issues']);self.assertFalse(checks[0]['issues'])
- def test_full_slide_shape_fills_the_new_proportion(self):
+ def test_full_slide_shape_keeps_its_place_in_the_centred_page(self):
   import xml.etree.ElementTree as E,json
   with tempfile.TemporaryDirectory() as d:
    a,b,o=[Path(d)/x for x in ['wide.pptx','fourthree.pptx','out.pptx']]
@@ -151,8 +151,9 @@ class Guards(unittest.TestCase):
     with zipfile.ZipFile(o) as z:
      node=E.fromstring(z.read('pptMerger/source1/ppt/slides/slide1.xml'))
      ns={'a':'http://schemas.openxmlformats.org/drawingml/2006/main'}
-     self.assertEqual(node.find('.//a:off',ns).attrib,{'x':'0','y':'0'})
-     self.assertEqual(node.find('.//a:ext',ns).attrib,{'cx':'12192000','cy':'6858000'})
+     # The 4:3 page is centred in the 16:9 one; the shape is not stretched.
+     self.assertEqual(node.find('.//a:off',ns).attrib,{'x':'1524000','y':'0'})
+     self.assertEqual(node.find('.//a:ext',ns).attrib,{'cx':'9144000','cy':'6858000'})
     report=json.loads(Path(str(o)+'.report.json').read_text())
     self.assertTrue(all(not f['issues'] for f in report['validation']))
  def test_check_detects_missing_or_changed_animation(self):

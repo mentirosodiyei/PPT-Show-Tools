@@ -37,12 +37,12 @@ impl<'a> PartPad<'a> {
         let (dir, name) = self.part.rsplit_once('/').unwrap_or(("", &self.part));
         format!("{dir}/_rels/{name}.rels")
     }
-    /// Replaces the picture of `blip_fill` by a copy padded so a box whose
-    /// width grew by `gx` and height by `gy` shows it whole and undistorted.
+    /// Replaces the picture of `blip_fill` by a copy with margins added on each
+    /// side, as fractions of the picture's own width or height:
+    /// [left, right, top, bottom]. The picture itself is unchanged and undistorted.
     /// False when that is not possible (other formats, existing crops, tiles).
-    pub fn pad(&mut self, state: &mut Pad, blip_fill: &mut Element, gx: f64, gy: f64) -> bool {
-        let k = gx / gy;
-        if (k - 1.0).abs() <= 1e-6 {
+    pub fn pad(&mut self, state: &mut Pad, blip_fill: &mut Element, sides: [f64; 4]) -> bool {
+        if sides.iter().all(|v| v.abs() <= 1e-6) {
             return true;
         }
         if blip_fill.child("tile").is_some() || has_offsets(blip_fill.child("srcRect")) || has_offsets(blip_fill.child("stretch").and_then(|s| s.child("fillRect"))) {
@@ -60,12 +60,12 @@ impl<'a> PartPad<'a> {
         if !["png", "jpg", "jpeg"].contains(&ext.as_str()) {
             return false;
         }
-        let key = format!("{media}|{k:.6}");
+        let key = format!("{media}|{:.6}|{:.6}|{:.6}|{:.6}", sides[0], sides[1], sides[2], sides[3]);
         let name = match state.made.get(&key) {
             Some(name) => name.clone(),
             None => {
                 let Ok(data) = std::fs::read(crate::xml::part_path(self.package, &media)) else { return false };
-                let Some(bytes) = padded(&data, ext != "png", gx, gy) else { return false };
+                let Some(bytes) = padded(&data, ext != "png", sides) else { return false };
                 let name = format!("ppt/media/pst-pad-{}.{ext}", uuid::Uuid::new_v4().simple().to_string().get(..8).unwrap_or("0"));
                 if std::fs::write(crate::xml::part_path(self.package, &name), bytes).is_err() {
                     return false;
@@ -176,13 +176,23 @@ pub fn register(package: &Path, state: &Pad) -> crate::Result<()> {
     write_xml(&ct, package, "[Content_Types].xml")
 }
 
-/// Canvas and image sizes for a picture of `w` × `h` pixels in a box grown by gx, gy.
-pub fn canvas(w: u32, h: u32, gx: f64, gy: f64) -> (u32, u32, u32, u32) {
+/// Equal margins on both sides for a box whose width grew by gx and height by gy
+/// (a picture background, which always fills the slide).
+pub fn centred(gx: f64, gy: f64) -> [f64; 4] {
     let s = gx.min(gy);
-    let (cw, ch) = (w as f64 * gx / s, h as f64 * gy / s);
+    let (mx, my) = ((gx / s - 1.0) / 2.0, (gy / s - 1.0) / 2.0);
+    [mx, mx, my, my]
+}
+
+/// Canvas size, picture size and picture position for a `w` × `h` picture with `sides` margins.
+pub fn canvas(w: u32, h: u32, sides: [f64; 4]) -> (u32, u32, u32, u32, u32, u32) {
+    let (cw, ch) = (w as f64 * (1.0 + sides[0] + sides[1]), h as f64 * (1.0 + sides[2] + sides[3]));
     let f = (MAX_PIXELS / (cw * ch)).sqrt().min(1.0);
     let px = |v: f64| (v * f).round().max(1.0) as u32;
-    (px(cw), px(ch), px(w as f64), px(h as f64))
+    let (cw, ch, iw, ih) = (px(cw), px(ch), px(w as f64), px(h as f64));
+    let ox = ((w as f64 * sides[0] * f).round() as u32).min(cw.saturating_sub(iw));
+    let oy = ((h as f64 * sides[2] * f).round() as u32).min(ch.saturating_sub(ih));
+    (cw, ch, iw, ih, ox, oy)
 }
 
 /// Average colour of each row (or column) of an edge strip `strip_div` deep,
@@ -219,10 +229,10 @@ fn edge_colours(img: &image::RgbaImage, horizontal: bool, far: bool, strip_div: 
 }
 
 /// The padded image, encoded as JPEG (photos) or PNG.
-fn padded(data: &[u8], jpeg: bool, gx: f64, gy: f64) -> Option<Vec<u8>> {
+fn padded(data: &[u8], jpeg: bool, sides: [f64; 4]) -> Option<Vec<u8>> {
     let source = image::load_from_memory(data).ok()?.to_rgba8();
     let (w, h) = source.dimensions();
-    let (cw, ch, iw, ih) = canvas(w, h, gx, gy);
+    let (cw, ch, iw, ih, ox, oy) = canvas(w, h, sides);
     let horizontal = cw > iw;
     // Next to the picture the margin takes its exact edge; further out it fades
     // into a soft wash of the same colours, so the join does not show.
@@ -238,7 +248,6 @@ fn padded(data: &[u8], jpeg: bool, gx: f64, gy: f64) -> Option<Vec<u8>> {
         [0, 1, 2, 3].map(|c| a[c] * (1.0 - t) + b[c] * t)
     };
     let picture = if (iw, ih) == (w, h) { source } else { image::imageops::resize(&source, iw, ih, image::imageops::FilterType::Triangle) };
-    let (ox, oy) = ((cw - iw) / 2, (ch - ih) / 2);
     let mut out = image::RgbaImage::new(cw, ch);
     let colour = |c: [f64; 4]| image::Rgba(c.map(|v| v.round().clamp(0.0, 255.0) as u8));
     for y in 0..ch {

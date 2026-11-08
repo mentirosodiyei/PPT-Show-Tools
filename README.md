@@ -14,7 +14,7 @@ Everything is on one screen: choose a **Function** and follow the controls below
 |---|---|
 | **Merge** | Combines presentations in the order shown. Each one keeps its own masters, themes, animations, transitions, media and embedded fonts. **Merge and save with PowerPoint…** also has Microsoft PowerPoint open and save the result (AppleScript on macOS, COM on Windows), without using your keyboard or mouse. |
 | **PDF to PowerPoint** | One slide per PDF page, as an image. Slides take the size set in Settings (with *Automatic*, the first page's proportion); text is not editable. |
-| **Resize slides** | Changes the slides to the size set in Settings (with *Automatic*, to 16:9) and adapts the layout to it (see *How slides are adapted*). |
+| **Resize slides** | Changes the slides to the size set in Settings (with *Automatic*, to 16:9) without changing the design; only the background grows (see *How slides are resized*). |
 | **Extract notes** | One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”. |
 
 ## Settings: slide size
@@ -22,16 +22,14 @@ Everything is on one screen: choose a **Function** and follow the controls below
 - **Automatic** (default): if every presentation has the same proportion (for example all 4800 × 1344 px), the largest of their sizes is used. With mixed proportions the largest 16:9 input is used (1920 × 1080 px if none is 16:9).
 - **Fixed size**: 16:9 at 1280 × 720, 1920 × 1080 or 3840 × 2160 px, 4:3 at 1024 × 768 px, or a **Custom** size such as 4800 × 1344 px. Typing a custom width or height selects *Custom*. Merge, PDF to PowerPoint and Resize slides all use it.
 
-### How slides are adapted
+### How slides are resized
 
-When a merge combines presentations of different sizes, each one is adapted to the output size on its own before they are joined. Adapting keeps the design instead of scaling the slide as one picture with empty bands:
+When a merge combines presentations of different sizes, each one is resized to the output size on its own before they are joined. Resizing never changes the design:
 
-- Text, fonts, groups, tables and charts scale by the same factor on both axes, so nothing is distorted.
-- Text boxes and placeholders follow the new proportion, so titles and body text use the new width or height.
-- Shapes that span the slide (bars) keep spanning it. Pictures that fill the slide, and picture backgrounds, are never cropped or stretched: the whole picture is shown, and the new margins take the colours of its edges, fading into a soft wash, so the join does not show. Formats other than PNG and JPEG, and pictures already cropped, keep their own proportion instead.
-- Everything else keeps its size and stays anchored where it was: a logo in a corner stays in that corner, a centred photo stays centred.
+- The whole slide is scaled as one block, by the factor that fits it in the new size, and centred. Nothing moves relative to anything else, nothing is stretched and nothing is cropped; text keeps its proportions and fonts scale with everything else.
+- Only the background grows into the new margins. Plain and gradient backgrounds cover them by themselves. Picture backgrounds, and pictures that fill the slide, are extended with the colours of their own edges, fading into a soft wash, so the join does not show (PNG and JPEG; other formats keep their margins in the background colour).
 - Videos are never modified. A video that filled the slide keeps its own proportion, centred; behind it, a copy covers the whole slide without distortion (cropped only outside the slide), heavily blurred and silent, and plays and pauses with it. macOS makes the copy itself (AVFoundation). Windows uses [FFmpeg](https://ffmpeg.org), which ships with the installer and the portable zip (LGPL build; see `FFMPEG-NOTICE.txt`). The app uses that copy only if it is exactly the file it was built with; otherwise it looks for an FFmpeg installed on the computer, and without one the background is a blurred still of the video's first frame (the report says so).
-- Animations, motion paths and transitions are unchanged (PowerPoint measures them as fractions of the slide).
+- Animations and motion paths are mapped into the centred content (PowerPoint measures them as fractions of the slide), so every movement covers the same part of the design; transitions are unchanged.
 
 Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\PPT Show Tools\settings.json` (the portable version keeps it only while it is open).
 

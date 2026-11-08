@@ -73,6 +73,7 @@ pub fn slide_size(root: &Element) -> Option<(i64, i64)> {
 #[derive(Clone)]
 pub struct PartFingerprint {
     pub timing: String,
+    timing_node: Option<Element>,
     pub transition: String,
     text: Vec<String>,
     shape_identity: Vec<String>,
@@ -106,12 +107,32 @@ impl PartFingerprint {
         });
         PartFingerprint {
             timing: semantic(t),
+            timing_node: t.cloned(),
             transition: semantic(element.child("transition")),
             text: texts,
             shape_identity: shapes,
             shape_ids: ids,
             timing_target_ids: targets,
         }
+    }
+
+    /// The timing a resize from `source` to `target` produces: animation
+    /// coordinates mapped into the centred, scaled content (see `scaler`).
+    pub fn expected_timing(&self, source: Option<(i64, i64)>, target: Option<(i64, i64)>) -> String {
+        let (Some(node), Some(s), Some(t)) = (&self.timing_node, source, target) else { return self.timing.clone() };
+        if s == t {
+            return self.timing.clone();
+        }
+        let factor = (t.0 as f64 / s.0 as f64).min(t.1 as f64 / s.1 as f64);
+        let (rx, ry) = (s.0 as f64 * factor / t.0 as f64, s.1 as f64 * factor / t.1 as f64);
+        if (rx - 1.0).abs() <= 1e-9 && (ry - 1.0).abs() <= 1e-9 {
+            return self.timing.clone();
+        }
+        let sx = (t.0 as f64 - s.0 as f64 * factor) / 2.0 / t.0 as f64;
+        let sy = (t.1 as f64 - s.1 as f64 * factor) / 2.0 / t.1 as f64;
+        let mut copy = node.clone();
+        crate::scaler::scale_timing_animations(&mut copy, rx, ry, sx, sy);
+        semantic(Some(&copy))
     }
 
 }
@@ -143,6 +164,7 @@ pub struct PackageSnapshot {
     has_vba: bool,
     embedded_fonts: Vec<String>,
     links: BTreeMap<String, Vec<ResourceLink>>,
+    slide_size: Option<(i64, i64)>,
 }
 
 impl PackageSnapshot {
@@ -172,6 +194,7 @@ impl PackageSnapshot {
             has_vba: crate::xml::part_path(root, "ppt/vbaProject.bin").exists(),
             embedded_fonts: embedded_typefaces(root),
             links,
+            slide_size: read_xml(root, "ppt/presentation.xml").ok().and_then(|d| slide_size(&d.root)),
         })
     }
 }
@@ -194,6 +217,7 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
     let all_files = package_files(merged);
     let names: HashSet<String> = all_files.iter().cloned().collect();
     let merged_pres = read_xml(merged, "ppt/presentation.xml")?;
+    let merged_size = slide_size(&merged_pres.root);
     let mut global = vec![];
     if read_xml(merged, "[Content_Types].xml").is_err() {
         global.push("[Content_Types].xml is missing or unreadable in the merged package.".into());
@@ -274,7 +298,7 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
             let imported = PartFingerprint::new(&read_xml(merged, &destination)?.root);
             let number = source.slides.iter().position(|s| s == part).map(|n| format!("slide {}", n + 1)).unwrap_or_else(|| part.clone());
             // Animation coordinates are fractions of the slide: resizing keeps them.
-            if original.timing != imported.timing {
+            if original.expected_timing(source.slide_size, merged_size) != imported.timing {
                 issues.push(format!("{number}: animation/timing does not match the original (missing or changed)."));
             }
             if original.transition != imported.transition {

@@ -301,8 +301,8 @@ impl App {
             Function::Merge => format!("Combines the presentations in the order shown. Each one keeps its masters, themes, animations, transitions, media and embedded fonts, and is adapted to the slide size first. Slide size: {size}."),
             Function::Pdf if automatic => "One slide per PDF page, as an image, using the first page's proportion; text is not editable. Slide size: Automatic.".into(),
             Function::Pdf => format!("One slide per PDF page, as an image fitted to {size}; text is not editable."),
-            Function::Resize if automatic => "Widens the slides to 16:9, adapting the layout: nothing is stretched, text boxes and full-width elements follow the new shape. Choose another size in Settings.".into(),
-            Function::Resize => format!("Adapts the slides to {size}: nothing is stretched, text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours."),
+            Function::Resize if automatic => "Widens the slides to 16:9 without changing the design: the content is scaled as a whole and centred, and only the background extends into the new margins. Choose another size in Settings.".into(),
+            Function::Resize => format!("Adapts the slides to {size}: the design does not change: the content is scaled as a whole and centred, and only the background extends into the new margins (photos with their own colours, videos with a blurred copy)."),
             Function::Notes => "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”.".into(),
         }
     }
@@ -723,7 +723,7 @@ impl App {
             if custom && !valid {
                 label(ui, "Each side must be between 96 and 5376 px.", regular(BODY), p.red);
             }
-            label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures filling the slide are shown whole, with margins in their own colours. Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
+            label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation keeps its design at the chosen size: the content is scaled as a whole, without stretching or cropping, and centred; only the background extends into the new margins (photos with their own colours, videos with a blurred copy). Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
                 if mac_button(ui, p, "Done", ButtonKind::Default, true).clicked() || enter {

@@ -32,12 +32,12 @@ enum PicturePadding {
             ((part as NSString).deletingLastPathComponent as NSString).appendingPathComponent("_rels/" + (part as NSString).lastPathComponent + ".rels")
         }
 
-        /// Replaces the picture of `blipFill` by a copy padded so a box whose width
-        /// grew by `gx` and height by `gy` shows it whole and undistorted. False when
-        /// that is not possible (other formats, existing crops, tiles).
-        func pad(_ state: Pad, _ blipFill: XMLElement, _ gx: Double, _ gy: Double) -> Bool {
-            let k = gx / gy
-            if abs(k - 1) <= 1e-6 { return true }
+        /// Replaces the picture of `blipFill` by a copy with margins added on each side,
+        /// as fractions of the picture's own width or height: [left, right, top, bottom].
+        /// The picture itself is unchanged and undistorted. False when that is not
+        /// possible (other formats, existing crops, tiles).
+        func pad(_ state: Pad, _ blipFill: XMLElement, _ sides: [Double]) -> Bool {
+            if sides.allSatisfy({ abs($0) <= 1e-6 }) { return true }
             if list(blipFill, "tile") != nil || hasOffsets(list(blipFill, "srcRect")) || hasOffsets(list(blipFill, "stretch").flatMap { list($0, "fillRect") }) { return false }
             guard let blip = list(blipFill, "blip"), let embed = blip.attribute(forLocalName: "embed", uri: rNS)?.stringValue, !embed.isEmpty else { return false }
             if rels == nil { rels = try? xml(package, relsPart) }
@@ -46,13 +46,13 @@ enum PicturePadding {
             let media = resolvePart(owner: part, target: attr(rel, "Target"))
             let ext = (media as NSString).pathExtension.lowercased()
             guard ["png", "jpg", "jpeg"].contains(ext) else { return false }
-            let key = "\(media)|\(String(format: "%.6f", k))"
+            let key = media + sides.map { String(format: "|%.6f", $0) }.joined()
             let name: String
             if let known = state.made[key] {
                 name = known
             } else {
                 guard let data = try? Data(contentsOf: package.appendingPathComponent(media)),
-                      let bytes = PicturePadding.padded(data, jpeg: ext != "png", gx, gy) else { return false }
+                      let bytes = PicturePadding.padded(data, jpeg: ext != "png", sides) else { return false }
                 name = "ppt/media/pst-pad-\(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased().prefix(8)).\(ext)"
                 guard (try? bytes.write(to: package.appendingPathComponent(name))) != nil else { return false }
                 state.extensions.insert(ext); state.made[key] = name
@@ -121,13 +121,21 @@ enum PicturePadding {
         try write(ct, package, "[Content_Types].xml")
     }
 
-    /// Canvas and image sizes for a picture of `w` × `h` pixels in a box grown by gx, gy.
-    static func canvas(_ w: Int, _ h: Int, _ gx: Double, _ gy: Double) -> (Int, Int, Int, Int) {
-        let s = min(gx, gy)
-        let cw = Double(w) * gx / s, ch = Double(h) * gy / s
+    /// Equal margins on both sides for a box whose width grew by gx and height by gy
+    /// (a picture background, which always fills the slide).
+    static func centred(_ gx: Double, _ gy: Double) -> [Double] {
+        let s = min(gx, gy), mx = (gx / s - 1) / 2, my = (gy / s - 1) / 2
+        return [mx, mx, my, my]
+    }
+
+    /// Canvas size, picture size and picture position for a `w` × `h` picture with `sides` margins.
+    static func canvas(_ w: Int, _ h: Int, _ sides: [Double]) -> (Int, Int, Int, Int, Int, Int) {
+        let cw = Double(w) * (1 + sides[0] + sides[1]), ch = Double(h) * (1 + sides[2] + sides[3])
         let f = min(1, (maxPixels / (cw * ch)).squareRoot())
         func px(_ v: Double) -> Int { max(1, Int((v * f).rounded())) }
-        return (px(cw), px(ch), px(Double(w)), px(Double(h)))
+        let (c, d, i, j) = (px(cw), px(ch), px(Double(w)), px(Double(h)))
+        let ox = min(Int((Double(w) * sides[0] * f).rounded()), max(c - i, 0)), oy = min(Int((Double(h) * sides[2] * f).rounded()), max(d - j, 0))
+        return (c, d, i, j, ox, oy)
     }
 
     /// Average colour of each row (or column) of an edge strip `stripDiv` deep,
@@ -168,11 +176,11 @@ enum PicturePadding {
     }
 
     /// The padded image, encoded as JPEG (photos) or PNG.
-    static func padded(_ data: Data, jpeg: Bool, _ gx: Double, _ gy: Double) -> Data? {
+    static func padded(_ data: Data, jpeg: Bool, _ sides: [Double]) -> Data? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
         let w = image.width, h = image.height
         guard w > 0, h > 0, let original = rgba(image, w, h) else { return nil }
-        let (cw, ch, iw, ih) = canvas(w, h, gx, gy)
+        let (cw, ch, iw, ih, ox, oy) = canvas(w, h, sides)
         let horizontal = cw > iw
         // Next to the picture the margin takes its exact edge; further out it fades
         // into a soft wash of the same colours, so the join does not show.
@@ -185,7 +193,6 @@ enum PicturePadding {
             return (0..<4).map { sharp[side][line][$0] * (1 - t) + soft[side][line][$0] * t }
         }
         guard let picture = (iw, ih) == (w, h) ? original : rgba(image, iw, ih) else { return nil }
-        let ox = (cw - iw) / 2, oy = (ch - ih) / 2
         var out = [UInt8](repeating: 0, count: cw * ch * 4)
         func put(_ x: Int, _ y: Int, _ c: [Double]) {
             let i = (y * cw + x) * 4

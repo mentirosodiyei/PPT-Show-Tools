@@ -82,23 +82,21 @@ class AdaptiveResize(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         return out
 
-    def test_4_3_to_16_9_keeps_every_object_undistorted_and_in_place(self):
+    def test_4_3_to_16_9_keeps_the_design_and_centres_it(self):
         body = (shape(2, 'Title', xfrm(457200, 274638, 8229600, 1143000), text='Quarterly review')
                 + pic(3, 'Logo', xfrm(8001000, 5943600, 685800, 685800))
                 + pic(4, 'Photo', xfrm(3200400, 2286000, 2743200, 2743200))
                 + shape(5, 'Bar', xfrm(0, 6400800, W, 457200))
                 + shape(6, 'Dot', xfrm(304800, 2743200, 914400, 914400), geom='ellipse'))
         f, root = frames(self.resize(body))
-        # Text box: follows the new proportion (width × 4/3), same height.
-        self.assertEqual(f['Title'], (609600, 274638, 10972800, 1143000))
-        # Logo in the bottom-right corner: same size, same margins to the corner.
-        self.assertEqual(f['Logo'], (12192000 - 457200 - 685800, 5943600, 685800, 685800))
-        # Photo in the middle: same size, still centred.
-        self.assertEqual(f['Photo'], (6096000 - 1371600, 2286000, 2743200, 2743200))
-        # Full-width bar: still spans the slide.
-        self.assertEqual(f['Bar'], (0, 6400800, 12192000, 457200))
-        # Circle near the left edge: still a circle, same margin.
-        self.assertEqual(f['Dot'], (304800, 2743200, 914400, 914400))
+        # Nothing moves relative to anything else: the 4:3 page is centred in
+        # the 16:9 one (1524000 EMU to the right) and nothing changes size.
+        dx = 1524000
+        self.assertEqual(f['Title'], (457200 + dx, 274638, 8229600, 1143000))
+        self.assertEqual(f['Logo'], (8001000 + dx, 5943600, 685800, 685800))
+        self.assertEqual(f['Photo'], (3200400 + dx, 2286000, 2743200, 2743200))
+        self.assertEqual(f['Bar'], (dx, 6400800, W, 457200))
+        self.assertEqual(f['Dot'], (304800 + dx, 2743200, 914400, 914400))
         self.assertEqual(root.find('.//a:rPr', NS).get('sz'), '2400')
         self.assertIsNone(root.find('.//a:srcRect', NS))
 
@@ -155,6 +153,16 @@ class AdaptiveResize(unittest.TestCase):
         self.assertGreater(left[0], 150); self.assertLess(left[2], 80)    # red side continues red
         self.assertGreater(right[2], 150); self.assertLess(right[0], 80)  # blue side continues blue
 
+    def test_off_centre_full_slide_picture_reaches_both_edges(self):
+        # A photo covering 95 % of the width from the left edge: it keeps its place in
+        # the centred page and is extended, unequally, to both new edges.
+        width = round(0.95 * W)
+        out = self.resize(pic(2, 'Cover', xfrm(0, 0, width, H)))
+        f, root = frames(out)
+        self.assertEqual(f['Cover'], (0, 0, 12192000, 6858000))
+        _, _, size, _, _ = self.padded_picture(out, 'ppt/slides/slide1.xml', './/p:pic/p:blipFill')
+        self.assertEqual(size, (round(40 * 12192000 / width), 30))
+
     def test_picture_background_is_shown_whole_never_cropped(self):
         out = self.resize(shape(2, 'Note', xfrm(457200, 457200, 3000000, 600000), text='x'), background=True)
         master, target, size, _, _ = self.padded_picture(out, 'ppt/slideMasters/slideMaster1.xml', './/p:bgPr/a:blipFill')
@@ -181,8 +189,9 @@ class AdaptiveResize(unittest.TestCase):
         self.assertEqual((gw, gh), (round(1000000 * s), round(500000 * s)))
         child = root.find('.//p:grpSp/p:sp/p:spPr/a:xfrm/a:ext', NS)
         self.assertEqual((int(child.get('cx')), int(child.get('cy'))), (round(1000000 * s), round(500000 * s)))
-        # The body text box spans the same share of the new width.
-        self.assertEqual(f['Body'][2], round(4114800 * 4800 * 9525 / W))
+        # The text box keeps its proportion, scaled like everything else.
+        self.assertEqual(f['Body'][2:], (round(4114800 * s), round(3200400 * s)))
+        self.assertEqual(f['Body'][0], round(457200 * s + (4800 * 9525 - W * s) / 2))
 
     def test_same_proportion_is_plain_proportional_scaling(self):
         body = pic(2, 'Logo', xfrm(8001000, 5943600, 685800, 685800))
