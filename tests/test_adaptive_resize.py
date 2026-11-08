@@ -10,7 +10,19 @@ A = 'http://schemas.openxmlformats.org/drawingml/2006/main'
 R = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships'
 K = 'http://schemas.openxmlformats.org/package/2006/relationships'
 NS = {'p': P, 'a': A}
-PNG = base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+jRZkAAAAASUVORK5CYII=')
+def png(width, height):
+    """RGB test picture: red on the left half, blue on the right, green bottom row."""
+    import struct, zlib
+    rows = b''
+    for y in range(height):
+        rows += b'\0' + b''.join(bytes((0, 200, 0) if y == height - 1 else ((220, 0, 0) if x < width // 2 else (0, 0, 220))) for x in range(width))
+    chunk = lambda kind, data: struct.pack('>I', len(data)) + kind + data + struct.pack('>I', zlib.crc32(kind + data))
+    return b'\x89PNG\r\n\x1a\n' + chunk(b'IHDR', struct.pack('>IIBBBBB', width, height, 8, 2, 0, 0, 0)) + chunk(b'IDAT', zlib.compress(rows)) + chunk(b'IEND', b'')
+PNG = png(40, 30)
+
+def png_size(data):
+    import struct
+    return struct.unpack('>II', data[16:24])
 W, H = 9144000, 6858000  # 4:3
 
 def xfrm(x, y, cx, cy):
@@ -90,19 +102,74 @@ class AdaptiveResize(unittest.TestCase):
         self.assertEqual(root.find('.//a:rPr', NS).get('sz'), '2400')
         self.assertIsNone(root.find('.//a:srcRect', NS))
 
-    def test_full_slide_picture_is_cropped_not_stretched(self):
-        f, root = frames(self.resize(pic(2, 'Cover', xfrm(0, 0, W, H))))
-        self.assertEqual(f['Cover'], (0, 0, 12192000, 6858000))
-        rect = root.find('.//p:blipFill/a:srcRect', NS)
-        # 4:3 picture in a 16:9 box: show the middle 75 % of its height.
-        self.assertEqual((rect.get('t'), rect.get('b')), ('12500', '12500'))
-
-    def test_picture_background_overflows_instead_of_stretching(self):
-        out = self.resize(shape(2, 'Note', xfrm(457200, 457200, 3000000, 600000), text='x'), background=True)
+    def padded_picture(self, out, part, blip_owner):
+        """The image a picture fill now uses, and its size in pixels."""
         with zipfile.ZipFile(out) as z:
-            master = E.fromstring(z.read('ppt/slideMasters/slideMaster1.xml'))
+            root = E.fromstring(z.read(part))
+            embed = root.find(blip_owner + '/a:blip', NS).get('{' + R + '}embed')
+            folder, name = part.rsplit('/', 1)
+            rels = E.fromstring(z.read(f'{folder}/_rels/{name}.rels'))
+            target = next(r.get('Target') for r in rels if r.get('Id') == embed)
+            data = z.read(target.lstrip('/'))
+            types = z.read('[Content_Types].xml').decode()
+        return root, target, png_size(data), data, types
+
+    def test_full_slide_picture_is_shown_whole_never_cropped(self):
+        out = self.resize(pic(2, 'Cover', xfrm(0, 0, W, H)))
+        f, root = frames(out)
+        self.assertEqual(f['Cover'], (0, 0, 12192000, 6858000))
+        self.assertIsNone(root.find('.//a:srcRect', NS))
+        _, target, size, _, types = self.padded_picture(out, 'ppt/slides/slide1.xml', './/p:pic/p:blipFill')
+        # 4:3 picture in a 16:9 frame: the whole 40 × 30 picture with side margins.
+        self.assertRegex(target, r'^/ppt/media/pst-pad-[0-9a-f]{8}\.png$')
+        self.assertEqual(size, (53, 30))
+        self.assertIn('Extension="png"', types)
+
+    def test_margins_take_the_colours_of_the_picture_edges(self):
+        import zlib
+        out = self.resize(pic(2, 'Cover', xfrm(0, 0, W, H)), size='3427x534')
+        _, _, (w, h), data, _ = self.padded_picture(out, 'ppt/slides/slide1.xml', './/p:pic/p:blipFill')
+        self.assertEqual((w, h), (round(40 * 3427 / 534 * 30 / 40), 30))
+        # Decode the PNG rows (RGBA or RGB, no filtering assumptions: use the decoder of the engine output).
+        idat = b''; i = 8
+        while i < len(data):
+            n = int.from_bytes(data[i:i + 4], 'big'); kind = data[i + 4:i + 8]
+            if kind == b'IDAT': idat += data[i + 8:i + 8 + n]
+            i += 12 + n
+        bpp = 4 if data[25] == 6 else 3
+        raw = zlib.decompress(idat); stride = w * bpp + 1
+        rows, prev = [], bytearray(w * bpp)
+        for y in range(h):
+            f, line = raw[y * stride], bytearray(raw[y * stride + 1:(y + 1) * stride])
+            for x in range(len(line)):
+                a = line[x - bpp] if x >= bpp else 0; b = prev[x]; c = prev[x - bpp] if x >= bpp else 0
+                if f == 1: line[x] = (line[x] + a) & 255
+                elif f == 2: line[x] = (line[x] + b) & 255
+                elif f == 3: line[x] = (line[x] + (a + b) // 2) & 255
+                elif f == 4:
+                    p = a + b - c; pa, pb, pc = abs(p - a), abs(p - b), abs(p - c)
+                    line[x] = (line[x] + (a if pa <= pb and pa <= pc else b if pb <= pc else c)) & 255
+            rows.append(bytes(line)); prev = line
+        pixel = lambda x, y: tuple(rows[y][x * bpp:x * bpp + 3])
+        left, right = pixel(0, h // 3), pixel(w - 1, h // 3)
+        self.assertGreater(left[0], 150); self.assertLess(left[2], 80)    # red side continues red
+        self.assertGreater(right[2], 150); self.assertLess(right[0], 80)  # blue side continues blue
+
+    def test_picture_background_is_shown_whole_never_cropped(self):
+        out = self.resize(shape(2, 'Note', xfrm(457200, 457200, 3000000, 600000), text='x'), background=True)
+        master, target, size, _, _ = self.padded_picture(out, 'ppt/slideMasters/slideMaster1.xml', './/p:bgPr/a:blipFill')
         rect = master.find('.//p:bgPr/a:blipFill/a:stretch/a:fillRect', NS)
-        self.assertEqual((rect.get('t'), rect.get('b')), ('-16667', '-16667'))
+        self.assertFalse(rect is not None and any(rect.get(k) for k in 'ltrb'))
+        self.assertEqual(size, (53, 30))
+
+    def test_picture_that_cannot_be_padded_keeps_its_proportion(self):
+        # An existing crop cannot be padded: the picture keeps its shape instead of being cropped more.
+        body = pic(2, 'Cropped', xfrm(0, 0, W, H)).replace('<a:stretch>', '<a:srcRect l="1000"/><a:stretch>')
+        f, root = frames(self.resize(body))
+        x, y, cx, cy = f['Cropped']
+        self.assertEqual((cx, cy), (W, H))
+        self.assertEqual(x, (12192000 - W) // 2)
+        self.assertEqual(root.find('.//a:srcRect', NS).get('l'), '1000')
 
     def test_ultra_wide_size_scales_text_and_keeps_groups_intact(self):
         body = shape(2, 'Body', xfrm(457200, 1600200, 4114800, 3200400), text='Revenue up 12%') + group(3, shape(4, 'Child', xfrm(0, 0, 1000000, 500000)))

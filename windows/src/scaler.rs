@@ -30,8 +30,9 @@ fn xml_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 ///   by s = min(sx, sy), the factor that fits the old page in the new one;
 /// - text boxes, placeholders and connectors take the new proportion (their
 ///   text reflows at the scaled font size);
-/// - shapes and pictures spanning the page keep spanning it; pictures are
-///   cropped instead of stretched, and picture backgrounds overflow the slide;
+/// - shapes spanning the page keep spanning it; pictures spanning it and picture
+///   backgrounds are never cropped or stretched: they are shown whole, and the
+///   new margins take the colours of the picture's edges (see `padding`);
 /// - other objects keep their place relative to the nearest edge, or to the
 ///   centre when they sit in the middle third.
 /// When the proportion does not change this is plain proportional scaling.
@@ -41,6 +42,7 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
         return Ok(());
     }
     let page = Adaptation::new(from, to);
+    let mut pad = crate::padding::Pad::default();
     // Notes and handouts use their own page coordinates; media bytes and
     // embedded workbooks are left untouched.
     for folder in ["slides", "slideLayouts", "slideMasters", "theme", "charts"] {
@@ -50,6 +52,7 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
         for file in files {
             let rel = file.strip_prefix(package).unwrap_or(&file).to_string_lossy().replace('\\', "/");
             let mut doc = read_xml(package, &rel)?;
+            let mut part = crate::padding::PartPad::new(package, &rel);
             let is_master = folder == "slideMasters" || folder == "theme";
             let layout_part = ["slides", "slideLayouts", "slideMasters"].contains(&folder);
             // Frames are read before the uniform pass rescales them.
@@ -65,16 +68,20 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
             if layout_part {
                 if let Some(tree) = doc.root.first_descendant_mut("spTree") {
                     let mut next = frames.into_iter();
-                    place_frames(tree, &page, &mut next);
+                    place_frames(tree, &page, &mut next, &mut |fill, gx, gy| part.pad(&mut pad, fill, gx, gy));
                 }
-                // A picture background always fills the slide: overflow it to the new proportion.
+                // A picture background always fills the slide: show it whole in the new proportion.
                 if let Some(bg) = doc.root.first_descendant_mut("bgPr").and_then(|b| b.child_mut("blipFill")) {
-                    overflow_fill(bg, page.sx, page.sy);
+                    if !part.pad(&mut pad, bg, page.sx, page.sy) {
+                        crate::padding::inset_fill(bg, page.sx, page.sy);
+                    }
                 }
             }
+            part.save()?;
             write_xml(&doc, package, &rel)?;
         }
     }
+    crate::padding::register(package, &pad)?;
     if !page.is_unit() {
         if let Some(style) = presentation.root.child_mut("defaultTextStyle") {
             scale_node(style, page.s, true, "presentation");
@@ -122,62 +129,19 @@ fn collect_frames(container: &Element, frames: &mut Vec<Option<Frame>>) {
 }
 
 /// Visits the same objects in the same order as `collect_frames`.
-fn place_frames(container: &mut Element, page: &Adaptation, frames: &mut std::vec::IntoIter<Option<Frame>>) {
+type PadFn<'a> = dyn FnMut(&mut Element, f64, f64) -> bool + 'a;
+
+fn place_frames(container: &mut Element, page: &Adaptation, frames: &mut std::vec::IntoIter<Option<Frame>>, pad: &mut PadFn) {
     for shape in container.elems_mut() {
         if shape.local() == "AlternateContent" {
             for branch in shape.elems_mut().filter(|b| b.local() == "Choice" || b.local() == "Fallback") {
-                place_frames(branch, page, frames);
+                place_frames(branch, page, frames, pad);
             }
         } else if SHAPES.contains(&shape.local()) {
             if let Some(Some(frame)) = frames.next() {
-                page.place(shape, frame);
+                page.place(shape, frame, pad);
             }
         }
-    }
-}
-
-/// Crops a picture fill (a:srcRect, in 1/1000 %) so a box whose width grew by
-/// `width_growth` and height by `height_growth` shows it without distortion.
-fn crop_picture(blip_fill: &mut Element, width_growth: f64, height_growth: f64) {
-    let k = width_growth / height_growth;
-    if (k - 1.0).abs() <= 1e-6 || blip_fill.child("tile").is_some() {
-        return;
-    }
-    if blip_fill.child("srcRect").is_none() {
-        // srcRect is DrawingML even inside p:blipFill: use the prefix of a:blip.
-        let prefix = blip_fill.child("blip").and_then(|b| b.qname.split_once(':')).map(|(p, _)| format!("{p}:")).unwrap_or_default();
-        let at = blip_fill.children.iter().position(|n| matches!(n, Node::Elem(e) if e.local() == "blip")).map(|i| i + 1).unwrap_or(0);
-        blip_fill.children.insert(at, Node::Elem(Element::new(&format!("{prefix}srcRect"), A_NS)));
-    }
-    let rect = blip_fill.child_mut("srcRect").expect("inserted above");
-    let value = |r: &Element, k: &str| r.attr(k).parse::<f64>().unwrap_or(0.0);
-    let (first, second, visible) = if k > 1.0 { ("t", "b", 1.0 - (value(rect, "t") + value(rect, "b")) / 100000.0) } else { ("l", "r", 1.0 - (value(rect, "l") + value(rect, "r")) / 100000.0) };
-    // Wider box: show less height; narrower box: show less width.
-    let extra = if k > 1.0 { (visible - visible / k) / 2.0 * 100000.0 } else { (visible - visible * k) / 2.0 * 100000.0 };
-    for key in [first, second] {
-        let v = value(rect, key) + extra;
-        rect.set_attr(key, &(v.round() as i64).to_string());
-    }
-}
-
-/// Backgrounds are cropped the way PowerPoint stores picture-fill offsets:
-/// a:stretch/a:fillRect extends past the slide (negative values, 1/1000 %)
-/// on the sides that no longer fit, so the picture keeps its proportion.
-fn overflow_fill(blip_fill: &mut Element, width_growth: f64, height_growth: f64) {
-    let k = width_growth / height_growth;
-    if (k - 1.0).abs() <= 1e-6 {
-        return;
-    }
-    let Some(stretch) = blip_fill.child_mut("stretch") else { return };
-    if stretch.child("fillRect").is_none() {
-        let prefix = stretch.qname.split_once(':').map(|(p, _)| format!("{p}:")).unwrap_or_default();
-        stretch.add(Element::new(&format!("{prefix}fillRect"), A_NS));
-    }
-    let rect = stretch.child_mut("fillRect").expect("inserted above");
-    let (first, second, extra) = if k > 1.0 { ("t", "b", (k - 1.0) / 2.0 * 100000.0) } else { ("l", "r", (1.0 / k - 1.0) / 2.0 * 100000.0) };
-    for key in [first, second] {
-        let v = rect.attr(key).parse::<f64>().unwrap_or(0.0) - extra;
-        rect.set_attr(key, &(v.round() as i64).to_string());
     }
 }
 
@@ -220,17 +184,27 @@ impl Adaptation {
         }
         (position, size)
     }
-    fn place(&self, shape: &mut Element, f: Frame) {
+    fn place(&self, shape: &mut Element, f: Frame, pad: &mut PadFn) {
         let kind = shape.local().to_string();
         let picture = kind == "pic" || (kind == "sp" && shape.child("spPr").and_then(|p| p.child("blipFill")).is_some());
         let text = kind == "sp" && !picture && (!shape.descendants("ph").is_empty() || shape.descendants("t").iter().any(|t| !t.text().is_empty()));
         let (spans_x, spans_y) = (f.cx >= 0.9 * self.width, f.cy >= 0.9 * self.height);
-        let (stretch_x, stretch_y) = match kind.as_str() {
+        let (mut stretch_x, mut stretch_y) = match kind.as_str() {
             "cxnSp" => (true, true),
             "sp" if text => (true, true),
             "sp" | "pic" => (spans_x, spans_y),
             _ => (false, false), // groups, charts, tables, SmartArt: rigid
         };
+        // A picture that would change shape is padded to its new proportion; if
+        // that is not possible it keeps its own proportion instead (never cropped).
+        if picture && (stretch_x || stretch_y) {
+            let gx = if stretch_x { self.sx } else { self.s };
+            let gy = if stretch_y { self.sy } else { self.s };
+            let fill = if kind == "pic" { shape.child_mut("blipFill") } else { shape.child_mut("spPr").and_then(|p| p.child_mut("blipFill")) };
+            if !(f.cx > 0.0 && f.cy > 0.0 && fill.is_some_and(|fill| pad(fill, gx, gy))) {
+                (stretch_x, stretch_y) = (false, false);
+            }
+        }
         let (x, w) = self.axis(f.x, f.cx, self.width, self.new_width, self.sx, stretch_x);
         let (y, h) = self.axis(f.y, f.cy, self.height, self.new_height, self.sy, stretch_y);
         let holder = if kind == "graphicFrame" || kind == "contentPart" {
@@ -248,12 +222,6 @@ impl Adaptation {
             if let Some(ext) = t.child_mut("ext") {
                 ext.set_attr("cx", &(w.round() as i64).to_string());
                 ext.set_attr("cy", &(h.round() as i64).to_string());
-            }
-        }
-        if picture && f.cx > 0.0 && f.cy > 0.0 && (stretch_x || stretch_y) {
-            let fill = if kind == "pic" { shape.child_mut("blipFill") } else { shape.child_mut("spPr").and_then(|p| p.child_mut("blipFill")) };
-            if let Some(fill) = fill {
-                crop_picture(fill, w / f.cx, h / f.cy);
             }
         }
     }

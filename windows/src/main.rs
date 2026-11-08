@@ -5,6 +5,7 @@ mod gui;
 mod merge;
 mod office;
 mod package;
+mod padding;
 mod pdf;
 mod powerpoint;
 mod reports;

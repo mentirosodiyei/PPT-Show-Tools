@@ -41,7 +41,7 @@ struct MainView: View {
         case .resize:
             return isAutomatic
                 ? "Widens the slides to 16:9, adapting the layout: nothing is stretched, text boxes and full-width elements follow the new shape. Choose another size in Settings."
-                : "Adapts the slides to \(sizeSummary): nothing is stretched, text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped."
+                : "Adapts the slides to \(sizeSummary): nothing is stretched, text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours."
         case .notes:
             return "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”."
         }
@@ -147,15 +147,11 @@ struct MainView: View {
                     (passed, slides, checks) = (report.structuralValidationPassed, report.totalSlides, report.validation)
                 }
                 DispatchQueue.main.async {
-                    mergeResult = output; validation = checks; busy = false; showChecks = true
+                    // No window opens by itself: the details are behind “Checks per file”.
+                    mergeResult = output; validation = checks; busy = false
                     status = passed
                         ? "\(slides) slides\(powerPoint ? " saved by PowerPoint" : ""). Structural checks passed; visual and playback review pending."
-                        : "Import NOT correct: differences found. Check the results per file before using the output."
-                    if !passed {
-                        let alert = NSAlert(); alert.alertStyle = .warning; alert.messageText = "The import is not correct"
-                        alert.informativeText = checks.filter { !$0.issues.isEmpty }.map { $0.file + ":\n" + $0.issues.prefix(5).joined(separator: "\n") }.joined(separator: "\n\n")
-                        alert.runModal()
-                    }
+                        : "Import NOT correct: differences found. Open “Checks per file” before using the output."
                 }
             } catch {
                 DispatchQueue.main.async { status = error.localizedDescription; busy = false }
@@ -323,7 +319,7 @@ struct SettingsSheet: View {
             if sizeChoice == SlideSizeChoice.custom.rawValue && !customValid {
                 Text("Each side must be between 96 and 5376 px.").foregroundStyle(.red)
             }
-            Text("Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures spanning the slide are cropped. Pixels are measured as in PowerPoint, at 96 per inch.")
+            Text("Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures filling the slide are shown whole, with margins in their own colours. Pixels are measured as in PowerPoint, at 96 per inch.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             HStack {
                 Text("PPT Show Tools \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools")

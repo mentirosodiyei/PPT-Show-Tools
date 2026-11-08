@@ -18,8 +18,9 @@ struct SlideScaler {
     ///   by s = min(sx, sy), the factor that fits the old page in the new one;
     /// - text boxes, placeholders and connectors take the new proportion (their
     ///   text reflows at the scaled font size);
-    /// - shapes and pictures spanning the page keep spanning it; pictures are
-    ///   cropped instead of stretched, and so are picture backgrounds;
+    /// - shapes spanning the page keep spanning it; pictures spanning it and picture
+    ///   backgrounds are never cropped or stretched: they are shown whole, and the
+    ///   new margins take the colours of the picture's edges (see PicturePadding);
     /// - other objects keep their place relative to the nearest edge, or to the
     ///   centre when they sit in the middle third.
     /// When the proportion does not change this is plain proportional scaling.
@@ -28,6 +29,8 @@ struct SlideScaler {
         guard size != target else { return }
         let page = Adaptation(from: size, to: target)
         let fm = FileManager.default
+        let pad = PicturePadding.Pad()
+        let packagePath = package.resolvingSymlinksInPath().path
         // Notes and handouts use a separate page coordinate system and must not
         // be scaled just because slide dimensions change. Image/media bytes and
         // embedded workbooks are also left untouched.
@@ -36,6 +39,8 @@ struct SlideScaler {
             guard fm.fileExists(atPath: dir.path), let files = fm.enumerator(at: dir, includingPropertiesForKeys: nil) else { continue }
             for case let file as URL in files where file.pathExtension == "xml" {
                 let document = try parseXML(at: file)
+                let partName = String(file.resolvingSymlinksInPath().path.dropFirst(packagePath.count + 1))
+                let part = PicturePadding.PartPad(package: package, part: partName)
                 let isMaster = folder == "slideMasters" || folder == "theme"
                 // Frames are read before the uniform pass rescales them.
                 var frames: [ShapeFrame] = []
@@ -44,14 +49,16 @@ struct SlideScaler {
                     collectFrames(tree, into: &frames)
                 }
                 if !page.isUnit { try scale(document, factor: page.s, isMaster: isMaster) }
-                for frame in frames { page.place(frame) }
+                for frame in frames { page.place(frame) { part.pad(pad, $0, $1, $2) } }
                 if let root = document.rootElement(), let bg = try root.nodes(forXPath: ".//*[local-name() = 'bgPr']/*[local-name() = 'blipFill']").first as? XMLElement {
-                    // A picture background always fills the slide: overflow it to the new proportion.
-                    overflowFill(bg, widthGrowth: page.sx, heightGrowth: page.sy)
+                    // A picture background always fills the slide: show it whole in the new proportion.
+                    if !part.pad(pad, bg, page.sx, page.sy) { PicturePadding.insetFill(bg, page.sx, page.sy) }
                 }
+                try part.save()
                 try serializedXML(document).write(to: file, options: .atomic)
             }
         }
+        try PicturePadding.register(package, pad)
         // Presentation default text styles can contain absolute font sizes.
         if !page.isUnit, let style = list(presentation.rootElement()!, "defaultTextStyle") {
             try scaleNode(style, factor: page.s, isMaster: true)
@@ -85,44 +92,6 @@ struct SlideScaler {
         }
     }
 
-    /// Crops a picture fill (a:srcRect, in 1/1000 %) so a box whose width grew by
-    /// `widthGrowth` and height by `heightGrowth` shows it without distortion.
-    static func cropPicture(_ blipFill: XMLElement, widthGrowth: Double, heightGrowth: Double) {
-        let k = widthGrowth / heightGrowth
-        guard abs(k - 1) > 1e-6, list(blipFill, "tile") == nil else { return }
-        var rect = list(blipFill, "srcRect")
-        if rect == nil {
-            let node = XMLElement(name: "a:srcRect", uri: drawingNS)
-            let index = (blipFill.children ?? []).firstIndex { ($0 as? XMLElement)?.localName == "blip" }.map { $0 + 1 } ?? 0
-            blipFill.insertChild(node, at: index)
-            rect = node
-        }
-        guard let rect else { return }
-        func value(_ key: String) -> Double { Double(attr(rect, key)) ?? 0 }
-        if k > 1 {
-            // Wider box: show less height.
-            let visible = 1 - (value("t") + value("b")) / 100000, extra = (visible - visible / k) / 2 * 100000
-            set(rect, "t", String(Int64((value("t") + extra).rounded()))); set(rect, "b", String(Int64((value("b") + extra).rounded())))
-        } else {
-            let visible = 1 - (value("l") + value("r")) / 100000, extra = (visible - visible * k) / 2 * 100000
-            set(rect, "l", String(Int64((value("l") + extra).rounded()))); set(rect, "r", String(Int64((value("r") + extra).rounded())))
-        }
-    }
-
-    /// Backgrounds are cropped the way PowerPoint stores picture-fill offsets:
-    /// a:stretch/a:fillRect extends past the slide (negative values, 1/1000 %)
-    /// on the sides that no longer fit, so the picture keeps its proportion.
-    static func overflowFill(_ blipFill: XMLElement, widthGrowth: Double, heightGrowth: Double) {
-        let k = widthGrowth / heightGrowth
-        guard abs(k - 1) > 1e-6, let stretch = list(blipFill, "stretch") else { return }
-        var rect = list(stretch, "fillRect")
-        if rect == nil { let node = XMLElement(name: "a:fillRect", uri: drawingNS); stretch.addChild(node); rect = node }
-        guard let rect else { return }
-        func value(_ key: String) -> Double { Double(attr(rect, key)) ?? 0 }
-        let (first, second, extra) = k > 1 ? ("t", "b", (k - 1) / 2 * 100000) : ("l", "r", (1 / k - 1) / 2 * 100000)
-        set(rect, first, String(Int64((value(first) - extra).rounded()))); set(rect, second, String(Int64((value(second) - extra).rounded())))
-    }
-
     /// Geometry of one resize; see `normalize`.
     struct Adaptation {
         let width: Double, height: Double, newWidth: Double, newHeight: Double
@@ -143,25 +112,28 @@ struct SlideScaler {
             if start >= 0 && start + length <= page { position = min(max(position, 0), max(newPage - size, 0)) }
             return (position, size)
         }
-        func place(_ f: ShapeFrame) {
+        func place(_ f: ShapeFrame, pad: (XMLElement, Double, Double) -> Bool) {
             let picture = f.kind == "pic" || (f.kind == "sp" && list(f.shape, "spPr").flatMap { list($0, "blipFill") } != nil)
             let text = f.kind == "sp" && !picture && ((try? f.shape.nodes(forXPath: ".//*[local-name() = 'ph']"))?.isEmpty == false || (try? f.shape.nodes(forXPath: ".//*[local-name() = 't']"))?.contains { !($0.stringValue ?? "").isEmpty } == true)
             let spansX = f.cx >= 0.9 * width, spansY = f.cy >= 0.9 * height
-            let stretchX: Bool, stretchY: Bool
+            var stretchX: Bool, stretchY: Bool
             switch f.kind {
             case "cxnSp": (stretchX, stretchY) = (true, true)
             case "sp" where text: (stretchX, stretchY) = (true, true)
             case "sp", "pic": (stretchX, stretchY) = (spansX, spansY)
             default: (stretchX, stretchY) = (false, false)  // groups, charts, tables, SmartArt: rigid
             }
+            // A picture that would change shape is padded to its new proportion; if
+            // that is not possible it keeps its own proportion instead (never cropped).
+            if picture && (stretchX || stretchY) {
+                let gx = stretchX ? sx : s, gy = stretchY ? sy : s
+                let fill = f.kind == "pic" ? list(f.shape, "blipFill") : list(f.shape, "spPr").flatMap { list($0, "blipFill") }
+                if !(f.cx > 0 && f.cy > 0 && fill.map { pad($0, gx, gy) } == true) { (stretchX, stretchY) = (false, false) }
+            }
             let (x, w) = axis(start: f.x, length: f.cx, page: width, newPage: newWidth, factor: sx, stretch: stretchX)
             let (y, h) = axis(start: f.y, length: f.cy, page: height, newPage: newHeight, factor: sy, stretch: stretchY)
             set(f.off, "x", String(Int64(x.rounded()))); set(f.off, "y", String(Int64(y.rounded())))
             set(f.ext, "cx", String(Int64(w.rounded()))); set(f.ext, "cy", String(Int64(h.rounded())))
-            if picture, f.cx > 0, f.cy > 0, stretchX || stretchY {
-                let fill = f.kind == "pic" ? list(f.shape, "blipFill") : list(f.shape, "spPr").flatMap { list($0, "blipFill") }
-                if let fill { cropPicture(fill, widthGrowth: w / f.cx, heightGrowth: h / f.cy) }
-            }
         }
     }
 

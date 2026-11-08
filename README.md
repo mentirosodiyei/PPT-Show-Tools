@@ -28,9 +28,8 @@ When a merge combines presentations of different sizes, each one is adapted to t
 
 - Text, fonts, groups, tables and charts scale by the same factor on both axes, so nothing is distorted.
 - Text boxes and placeholders follow the new proportion, so titles and body text use the new width or height.
-- Shapes and pictures that span the slide (bars, full-bleed photos) keep spanning it; pictures are cropped, not stretched.
+- Shapes that span the slide (bars) keep spanning it. Pictures that fill the slide, and picture backgrounds, are never cropped or stretched: the whole picture is shown, and the new margins take the colours of its edges, fading into a soft wash, so the join does not show. Formats other than PNG and JPEG, and pictures already cropped, keep their own proportion instead.
 - Everything else keeps its size and stays anchored where it was: a logo in a corner stays in that corner, a centred photo stays centred.
-- Picture backgrounds fill the new slide and overflow on the sides that no longer fit, without stretching.
 - Animations, motion paths and transitions are unchanged (PowerPoint measures them as fractions of the slide).
 
 Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\PPT Show Tools\settings.json` (the portable version keeps it only while it is open).

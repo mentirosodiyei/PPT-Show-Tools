@@ -343,7 +343,7 @@ struct OpenXMLMerger {
             // Each presentation is adapted on its own before the merge.
             try SlideScaler.normalize(package: roots[i], presentation: docs[i], from: sizes[i], to: target)
             let sameShape = SlideScaler.sameAspect(sizes[i], target)
-            scalingWarnings.append("\(inputs[i].lastPathComponent): \(describeSize(sizes[i])) → \(describeSize(target)); \(sameShape ? "scaled proportionally" : "adapted to the new proportion: nothing is stretched; text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped, other objects keep their place").")
+            scalingWarnings.append("\(inputs[i].lastPathComponent): \(describeSize(sizes[i])) → \(describeSize(target)); \(sameShape ? "scaled proportionally" : "adapted to the new proportion: nothing is stretched; text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours, other objects keep their place").")
         }
         let counts = docs.map { children(list($0.rootElement()!, "sldIdLst")!, "sldId").count }
         guard counts.allSatisfy({ $0 > 0 }) else { try fail("One of the presentations has no slides.") }

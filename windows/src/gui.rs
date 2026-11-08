@@ -302,7 +302,7 @@ impl App {
             Function::Pdf if automatic => "One slide per PDF page, as an image, using the first page's proportion; text is not editable. Slide size: Automatic.".into(),
             Function::Pdf => format!("One slide per PDF page, as an image fitted to {size}; text is not editable."),
             Function::Resize if automatic => "Widens the slides to 16:9, adapting the layout: nothing is stretched, text boxes and full-width elements follow the new shape. Choose another size in Settings.".into(),
-            Function::Resize => format!("Adapts the slides to {size}: nothing is stretched, text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped."),
+            Function::Resize => format!("Adapts the slides to {size}: nothing is stretched, text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours."),
             Function::Notes => "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”.".into(),
         }
     }
@@ -384,16 +384,12 @@ impl App {
                 self.busy = false;
                 self.merge_result = Some(job.output.clone());
                 self.validation = validation;
-                self.show_checks = true;
+                // No window opens by itself: the details are behind “Checks per file”.
                 self.status = if passed {
                     format!("{slides} slides{}. Structural checks passed; visual and playback review pending.", if job.powerpoint { " saved by PowerPoint" } else { "" })
                 } else {
-                    "Import NOT correct: differences found. Check the results per file before using the output.".into()
+                    "Import NOT correct: differences found. Open “Checks per file” before using the output.".into()
                 };
-                if !passed {
-                    let text = self.validation.iter().filter(|v| !v.issues.is_empty()).map(|v| format!("{}:\n{}", v.file, v.issues.iter().take(5).cloned().collect::<Vec<_>>().join("\n"))).collect::<Vec<_>>().join("\n\n");
-                    self.alert = Some(Alert { title: "The import is not correct".into(), text, buttons: vec!["OK"] });
-                }
             }
             Msg::Merged(_, Err(Error::Fail(message))) => {
                 self.busy = false;
@@ -727,7 +723,7 @@ impl App {
             if custom && !valid {
                 label(ui, "Each side must be between 96 and 5376 px.", regular(BODY), p.red);
             }
-            label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures spanning the slide are cropped. Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
+            label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures filling the slide are shown whole, with margins in their own colours. Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
                 if mac_button(ui, p, "Done", ButtonKind::Default, true).clicked() || enter {

@@ -294,7 +294,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
     let canvas = if scaler::same_aspect((w, h), target) {
         format!("Canvas {}; content scaled proportionally", describe_size(target))
     } else {
-        format!("Canvas {}; layout adapted: nothing is stretched, text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped", describe_size(target))
+        format!("Canvas {}; layout adapted: nothing is stretched, text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours", describe_size(target))
     };
     let report = ToolReport {
         operation: format!("Resize slides: {} → {}", describe_size((w, h)), describe_size(target)),
@@ -302,7 +302,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
         output: output.display().to_string(),
         pages: (0..before.slides.len()).map(|i| ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] }).collect(),
         checks: vec![canvas, "Order, text, notes, animations, transitions and resources verified after saving".into()],
-        limitations: strings(&["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped and other objects keep their size and place.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
+        limitations: strings(&["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours and other objects keep their size and place.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
     };
     publish(&archive, &report)?;
     Ok(report)
