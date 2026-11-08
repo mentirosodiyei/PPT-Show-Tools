@@ -68,7 +68,7 @@ mod imp {
     pub struct PdfDoc;
     impl PdfDoc {
         pub fn open(_: &Path) -> Result<PdfDoc> {
-            fail("This build converts PDFs with the Windows renderer. On a Mac, use Deckwright for macOS.")
+            fail("This build converts PDFs with the Windows renderer. On a Mac, use PPT Show Tools for macOS.")
         }
         pub fn page_count(&self) -> usize {
             0

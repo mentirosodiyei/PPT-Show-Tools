@@ -92,7 +92,7 @@ struct PowerPointSave {
         let message = String(decoding: errors, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines)
         guard task.terminationStatus == 0 else {
             if message.contains("-1743") {
-                try fail("Allow Deckwright to control Microsoft PowerPoint: System Settings → Privacy & Security → Automation.")
+                try fail("Allow PPT Show Tools to control Microsoft PowerPoint: System Settings → Privacy & Security → Automation.")
             }
             try fail("PowerPoint could not save the merge: " + (message.isEmpty ? "unknown error" : message))
         }
@@ -107,7 +107,7 @@ struct PowerPointSave {
         guard !fm.fileExists(atPath: output.path), !ReportStore.collides(output, [".report.json", ".report.txt"]) else { try fail("The output file or its report already exists. Choose another name.") }
         // PowerPoint is sandboxed: the intermediate lives in the destination folder,
         // so a single folder access grant covers both files.
-        let intermediate = output.deletingLastPathComponent().appendingPathComponent("Deckwright-temp-\(UUID().uuidString.prefix(8)).pptx")
+        let intermediate = output.deletingLastPathComponent().appendingPathComponent("PPTShowTools-temp-\(UUID().uuidString.prefix(8)).pptx")
         defer { try? fm.removeItem(at: intermediate) }
         progress("Merging and checking…")
         let openXML = try OpenXMLMerger().merge(inputs: inputs, output: intermediate, fixedSize: fixedSize, writeReports: false)
@@ -133,11 +133,11 @@ struct PowerPointSave {
             ])
         }
         let passed = checks.allSatisfy { $0.issues.isEmpty }
-        let report = PowerPointMergeReport(engine: "Deckwright-OpenXML+PowerPoint-AppleEvents-v0.8.0", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
+        let report = PowerPointMergeReport(engine: "PPTShowTools-OpenXML+PowerPoint-AppleEvents-v0.9.0", inputFiles: inputs.map { $0.path }, output: output.path, openXML: openXML, powerPointSlides: saved.slides, powerPointValidation: checks, overallStatus: passed ? "structural_checks_passed_needs_review" : "import_failed_validation", warnings: warnings)
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try ReportStore.write(try encoder.encode(report), for: output, ".report.json")
-            var lines = ["DECKWRIGHT — OPEN XML MERGE SAVED WITH POWERPOINT", passed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", ""]
+            var lines = ["PPTSHOWTOOLS — OPEN XML MERGE SAVED WITH POWERPOINT", passed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", ""]
             for (i, check) in report.validation.enumerated() {
                 lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT"]
                 lines += check.issues.map { "ERROR: " + $0 } + check.needsReview.map { "TO REVIEW: " + $0 } + [""]

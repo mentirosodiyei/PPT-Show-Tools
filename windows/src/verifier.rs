@@ -364,7 +364,7 @@ fn embedded_typefaces(root: &Path) -> Vec<String> {
 /// `fixed` and `fit` must match the options the output was merged with, so
 /// animations are checked against the scaling actually applied.
 pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
-    let temp = TempDir::new("Deckwright-Check")?;
+    let temp = TempDir::new("PPTShowTools-Check")?;
     let mut snapshots = vec![];
     for (i, input) in inputs.iter().enumerate() {
         let dir = temp.path().join(format!("s{i}"));

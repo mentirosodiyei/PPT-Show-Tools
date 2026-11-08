@@ -126,7 +126,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             return fail("Invalid input.");
         }
     }
-    let temp = TempDir::new("Deckwright")?;
+    let temp = TempDir::new("PPT Show Tools")?;
     let mut roots = vec![];
     for (i, input) in inputs.iter().enumerate() {
         let dir = temp.path().join(format!("input{i}"));
@@ -400,7 +400,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
     let validation = verify(&originals, inputs, &verification)?;
     let passed = validation.iter().all(|v| v.issues.is_empty());
     let report = MergeReport {
-        engine: "Deckwright-OpenXML-v0.8.0-windows".into(),
+        engine: "PPTShowTools-OpenXML-v0.9.0-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         total_slides: counts.iter().sum(),
         slide_counts: counts,
@@ -416,7 +416,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
     }
     let written = (|| -> Result<()> {
         crate::reports::write(output, ".report.json", &crate::to_json(&report)?)?;
-        let mut lines = vec!["DECKWRIGHT — CHECKS PER FILE".to_string(), if passed { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new(), format!("Output size: {}", describe_size(target)), String::new()];
+        let mut lines = vec!["PPTSHOWTOOLS — CHECKS PER FILE".to_string(), if passed { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new(), format!("Output size: {}", describe_size(target)), String::new()];
         for (i, check) in report.validation.iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
             lines.push(if check.issues.is_empty() { "STRUCTURE: checks passed; this is not full fidelity." } else { "IMPORT NOT CORRECT" }.into());

@@ -18,7 +18,7 @@ struct ToolReport: Codable {
 struct PresentationTools {
     static let fm = FileManager.default
     static func temp() throws -> URL {
-        let p=fm.temporaryDirectory.appendingPathComponent("Deckwright-Tools-"+UUID().uuidString)
+        let p=fm.temporaryDirectory.appendingPathComponent("PPTShowTools-Tools-"+UUID().uuidString)
         try fm.createDirectory(at:p,withIntermediateDirectories:true);return p
     }
     static func requireNew(_ input:URL,_ output:URL) throws {

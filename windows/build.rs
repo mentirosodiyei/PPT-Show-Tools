@@ -57,12 +57,12 @@ fn version_info(version: &str) -> Vec<u8> {
         fixed.extend(x.to_le_bytes());
     }
     let strings: Vec<Vec<u8>> = [
-        ("CompanyName", "Deckwright"),
-        ("FileDescription", "Deckwright"),
+        ("CompanyName", "PPT Show Tools"),
+        ("FileDescription", "PPT Show Tools"),
         ("FileVersion", version),
-        ("InternalName", "Deckwright"),
-        ("OriginalFilename", "Deckwright.exe"),
-        ("ProductName", "Deckwright"),
+        ("InternalName", "PPTShowTools"),
+        ("OriginalFilename", "PPTShowTools.exe"),
+        ("ProductName", "PPT Show Tools"),
         ("ProductVersion", version),
     ]
     .iter()
@@ -103,7 +103,7 @@ fn main() {
     }
     resource(&mut res, 14, 1, &group, 0x1030, 0x0409); // RT_GROUP_ICON
     resource(&mut res, 16, 1, &version_info(&env::var("CARGO_PKG_VERSION").unwrap()), 0x0030, 0x0409); // RT_VERSION
-    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("deckwright.res");
+    let out = PathBuf::from(env::var("OUT_DIR").unwrap()).join("pptshowtools.res");
     fs::write(&out, res).unwrap();
     println!("cargo:rustc-link-arg-bins={}", out.display());
 }

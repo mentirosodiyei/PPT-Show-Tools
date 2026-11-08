@@ -50,7 +50,7 @@ struct MainView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Deckwright").font(.largeTitle.bold())
+                Text("PPT Show Tools").font(.largeTitle.bold())
                 Spacer()
                 Button("Settings…") { showSettings = true }
             }

@@ -4,9 +4,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-/// DECKWRIGHT_MAX_PACKAGE_BYTES lowers the limit for the test suite.
+/// PPTSHOWTOOLS_MAX_PACKAGE_BYTES lowers the limit for the test suite.
 pub fn max_package_bytes() -> u64 {
-    std::env::var("DECKWRIGHT_MAX_PACKAGE_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(8 * 1024 * 1024 * 1024)
+    std::env::var("PPTSHOWTOOLS_MAX_PACKAGE_BYTES").ok().and_then(|v| v.parse().ok()).unwrap_or(8 * 1024 * 1024 * 1024)
 }
 pub const MAX_PACKAGE_ENTRIES: usize = 100_000;
 

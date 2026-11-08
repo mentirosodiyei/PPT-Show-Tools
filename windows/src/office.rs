@@ -27,7 +27,7 @@ pub fn prepare(inputs: &[PathBuf], destination: &Path) -> Result<OfficePreparati
     if inputs.len() < 2 || destination.exists() {
         return fail("Two inputs and a new preparation folder are required.");
     }
-    let temp = TempDir::new("Deckwright-Office")?;
+    let temp = TempDir::new("PPTShowTools-Office")?;
     let mut roots = vec![];
     let mut docs = vec![];
     let mut sizes = vec![];
@@ -141,7 +141,7 @@ fn media(root: &Path, slides: &[String]) -> Result<HashSet<String>> {
 }
 
 pub fn verify(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
-    let temp = TempDir::new("Deckwright-OfficeCheck")?;
+    let temp = TempDir::new("PPTShowTools-OfficeCheck")?;
     let merged = temp.path().join("merged");
     std::fs::create_dir_all(&merged).or_else(|e| fail(e.to_string()))?;
     extract(output, &merged)?;

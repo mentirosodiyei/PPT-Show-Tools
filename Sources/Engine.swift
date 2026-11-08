@@ -52,8 +52,8 @@ func planSlideSize(_ sizes: [(Int64, Int64)], fixed: (Int64, Int64)?) throws -> 
 // symbolic links are refused afterwards, as later reads would follow them.
 let maxPackageEntries = 100_000
 var maxPackageBytes: Int64 {
-    // DECKWRIGHT_MAX_PACKAGE_BYTES lowers the limit for the test suite.
-    Int64(ProcessInfo.processInfo.environment["DECKWRIGHT_MAX_PACKAGE_BYTES"] ?? "") ?? 8 * 1024 * 1024 * 1024
+    // PPTSHOWTOOLS_MAX_PACKAGE_BYTES lowers the limit for the test suite.
+    Int64(ProcessInfo.processInfo.environment["PPTSHOWTOOLS_MAX_PACKAGE_BYTES"] ?? "") ?? 8 * 1024 * 1024 * 1024
 }
 private func capture(_ executable: String, _ args: [String]) throws -> (Int32, Data) {
     let task = Process(), pipe = Pipe()
@@ -228,7 +228,7 @@ struct OpenXMLMerger {
         for input in inputs {
             guard ["pptx", "pptm"].contains(input.pathExtension.lowercased()), input.standardizedFileURL != output.standardizedFileURL else { try fail("Invalid input.") }
         }
-        let temp = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("Deckwright-" + UUID().uuidString)
+        let temp = fm.temporaryDirectory.resolvingSymlinksInPath().appendingPathComponent("PPTShowTools-" + UUID().uuidString)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true); defer { try? fm.removeItem(at: temp) }
         var roots: [URL] = []
         for (i, input) in inputs.enumerated() {
@@ -437,13 +437,13 @@ struct OpenXMLMerger {
         try fm.createDirectory(at: verificationRoot, withIntermediateDirectories: true)
         try run("/usr/bin/ditto", ["-x", "-k", archive.path, verificationRoot.path])
         let validation = try PackageVerifier.verify(sources: originals, inputs: inputs, merged: verificationRoot)
-        let report = MergeReport(engine: "Deckwright-OpenXML-v0.8.0", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
+        let report = MergeReport(engine: "PPTShowTools-OpenXML-v0.9.0", inputFiles: inputs.map { $0.path }, slideCounts: counts, totalSlides: counts.reduce(0, +), warnings: warnings, powerPointPlaybackValidated: false, validation: validation, overallStatus: validation.allSatisfy { $0.issues.isEmpty } ? "structural_checks_passed_needs_review" : "import_failed_validation", validationScope: "Structural comparisons against each original; visual rendering, playback and editing not validated.")
         try fm.copyItem(at: archive, to: output)
         guard writeReports else { return report }
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try ReportStore.write(try encoder.encode(report), for: output, ".report.json")
-            var lines = ["DECKWRIGHT — CHECKS PER FILE", report.structuralValidationPassed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", "", "Output size: \(describeSize(target))", ""]
+            var lines = ["PPTSHOWTOOLS — CHECKS PER FILE", report.structuralValidationPassed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", "", "Output size: \(describeSize(target))", ""]
             for (i, check) in validation.enumerated() {
                 lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT", "\(check.checkedSlides) slides; \(check.slidesWithAnimation) with animation; \(check.binaryResourcesChecked) resources checked."]
                 lines += check.checks.map { "Checked: " + $0 }

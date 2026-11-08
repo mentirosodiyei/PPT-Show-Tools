@@ -1,4 +1,4 @@
-//! Output slide size chosen in Settings, stored in %APPDATA%\Deckwright\settings.json
+//! Output slide size chosen in Settings, stored in %APPDATA%\PPT Show Tools\settings.json
 //! by the installed app. The portable app keeps it only while it is open.
 //! Presets and custom sizes are pixels at 96 per inch, as PowerPoint measures them.
 use crate::merge::EMU_PER_PIXEL;
@@ -84,7 +84,7 @@ impl Settings {
     }
     fn path() -> Option<PathBuf> {
         let base = std::env::var_os("APPDATA").map(PathBuf::from).or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))?;
-        Some(base.join("Deckwright").join("settings.json"))
+        Some(base.join("PPT Show Tools").join("settings.json"))
     }
     pub fn load() -> Settings {
         if !crate::reports::installed() {

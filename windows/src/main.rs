@@ -131,7 +131,7 @@ fn run_cli(all: &[String]) -> i32 {
                 println!("{} slides. Report: {}", report.total_slides, report_path(args[2]));
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }
-            _ => fail("Usage: Deckwright --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       Deckwright --resize [--size WxH] output.pptx input.pptx\n       Deckwright --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       Deckwright --extract-notes output.pptx input.pptx"),
+            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx"),
         }
     })();
     match result {

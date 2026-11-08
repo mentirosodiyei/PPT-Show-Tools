@@ -1,10 +1,10 @@
 import Foundation
 
 /// Where reports and error logs go. Nothing is written next to the files the
-/// user converts: everything goes to ~/Library/Logs/Deckwright, and files there
+/// user converts: everything goes to ~/Library/Logs/PPT Show Tools, and files there
 /// older than 30 days are deleted.
 ///
-/// DECKWRIGHT_LOG_DIR replaces that folder (tests). DECKWRIGHT_REPORTS_NEXT_TO_OUTPUT=1
+/// PPTSHOWTOOLS_LOG_DIR replaces that folder (tests). PPTSHOWTOOLS_REPORTS_NEXT_TO_OUTPUT=1
 /// keeps the old behaviour of writing `<output>.report.json` beside the output,
 /// for scripts and the test suite.
 enum ReportStore {
@@ -12,11 +12,11 @@ enum ReportStore {
     private static let lock = NSLock()
     private static var bases: [String: URL] = [:]
 
-    static var nextToOutput: Bool { ProcessInfo.processInfo.environment["DECKWRIGHT_REPORTS_NEXT_TO_OUTPUT"] == "1" }
+    static var nextToOutput: Bool { ProcessInfo.processInfo.environment["PPTSHOWTOOLS_REPORTS_NEXT_TO_OUTPUT"] == "1" }
 
     static var folder: URL {
-        if let custom = ProcessInfo.processInfo.environment["DECKWRIGHT_LOG_DIR"], !custom.isEmpty { return URL(fileURLWithPath: custom) }
-        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/Deckwright")
+        if let custom = ProcessInfo.processInfo.environment["PPTSHOWTOOLS_LOG_DIR"], !custom.isEmpty { return URL(fileURLWithPath: custom) }
+        return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/PPT Show Tools")
     }
 
     /// Creates the folder and deletes what is older than 30 days.
@@ -79,7 +79,7 @@ enum ReportStore {
         let text = Data(error.localizedDescription.utf8)
         let dir = nextToOutput ? output.deletingLastPathComponent() : prepare()
         guard let dir else { return "No log could be written." }
-        let log = dir.appendingPathComponent("Deckwright-ERROR-" + UUID().uuidString + ".log")
+        let log = dir.appendingPathComponent("PPTShowTools-ERROR-" + UUID().uuidString + ".log")
         do { try text.write(to: log, options: .withoutOverwriting); return log.path } catch { return "No log could be written." }
     }
 }

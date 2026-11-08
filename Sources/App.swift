@@ -38,11 +38,23 @@ enum SlideSizeChoice: String, CaseIterable, Identifiable {
 }
 
 @main
-struct DeckwrightApp: App {
+struct PPTShowToolsApp: App {
     init() {
         if CommandLine.arguments.count > 1 { exit(Self.runCommandLine(CommandLine.arguments)) }
         Self.forgetBrokenWindowFrames()
+        Self.importDeckwrightSettings()
         DispatchQueue.global(qos: .utility).async { ReportStore.prepare() }  // deletes logs older than 30 days
+    }
+
+    /// This app was called Deckwright up to 0.8.0: bring over its slide size once.
+    static func importDeckwrightSettings() {
+        let defaults = UserDefaults.standard
+        guard !defaults.bool(forKey: "importedDeckwrightSettings") else { return }
+        defaults.set(true, forKey: "importedDeckwrightSettings")
+        guard defaults.object(forKey: "slideSize") == nil, let old = UserDefaults(suiteName: "io.github.mentirosodiyei.deckwright") else { return }
+        for key in ["slideSize", "customWidth", "customHeight"] {
+            if let value = old.object(forKey: key) { defaults.set(value, forKey: key) }
+        }
     }
 
     /// Versions 0.7.0–0.7.2 could save a window as tall as (or taller than) the
@@ -110,11 +122,11 @@ struct DeckwrightApp: App {
             default: break
             }
             try fail("""
-            Usage: Deckwright --merge [--size WxH] output.pptx input1.pptx input2.pptx […]
-                   Deckwright --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]
-                   Deckwright --resize [--size WxH] output.pptx input.pptx
-                   Deckwright --pdf-to-ppt output.pptx input.pdf
-                   Deckwright --extract-notes output.pptx input.pptx
+            Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]
+                   PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]
+                   PPTShowTools --resize [--size WxH] output.pptx input.pptx
+                   PPTShowTools --pdf-to-ppt output.pptx input.pdf
+                   PPTShowTools --extract-notes output.pptx input.pptx
             """)
         } catch {
             fputs(error.localizedDescription + "\n", stderr); return 1
@@ -122,6 +134,6 @@ struct DeckwrightApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Deckwright") { MainView() }.defaultSize(width: 850, height: 650).windowResizability(.contentMinSize)
+        WindowGroup("PPT Show Tools") { MainView() }.defaultSize(width: 850, height: 650).windowResizability(.contentMinSize)
     }
 }

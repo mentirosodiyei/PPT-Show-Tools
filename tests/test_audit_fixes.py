@@ -53,7 +53,7 @@ class Packages(unittest.TestCase):
                 for n, v in p.items():
                     z.writestr(n, v)
                 z.writestr('ppt/media/big.bin', b'\0' * 3_000_000)
-            env = {'DECKWRIGHT_MAX_PACKAGE_BYTES': '500000'}
+            env = {'PPTSHOWTOOLS_MAX_PACKAGE_BYTES': '500000'}
             honest = run('--merge', o, a, b, env=env)
             self.assertEqual(honest.returncode, 1); self.assertIn('too large', honest.stderr)
             # Rewrite the declared size of the big entry to 10 bytes in both headers.
@@ -168,8 +168,8 @@ class Outputs(unittest.TestCase):
             bad = src / 'bad.pptx'; bad.write_bytes(b'not a zip')
             r = run('--extract-notes', out / 'notes.pptx', bad)
             self.assertEqual(r.returncode, 1)
-            self.assertFalse(list(src.glob('Deckwright-ERROR-*.log')))
-            self.assertTrue(list(out.glob('Deckwright-ERROR-*.log')))
+            self.assertFalse(list(src.glob('PPTShowTools-ERROR-*.log')))
+            self.assertTrue(list(out.glob('PPTShowTools-ERROR-*.log')))
 
 if __name__ == '__main__':
     unittest.main()

@@ -459,7 +459,7 @@ impl App {
 
     fn header(&mut self, ui: &mut egui::Ui, p: &Palette) {
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 32.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.add(egui::Label::new(RichText::new("Deckwright").font(bold(26.0)).color(p.text)).selectable(false));
+            ui.add(egui::Label::new(RichText::new("PPT Show Tools").font(bold(26.0)).color(p.text)).selectable(false));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if mac_button(ui, p, "Settings…", ButtonKind::Normal, true).clicked() {
                     self.show_settings = true;
@@ -784,21 +784,21 @@ impl App {
     // ----- Screenshot hook used to compare with the macOS app -----
 
     fn snapshot_setup(&mut self) {
-        let Ok(path) = std::env::var("DECKWRIGHT_SNAPSHOT") else { return };
+        let Ok(path) = std::env::var("PPTSHOWTOOLS_SNAPSHOT") else { return };
         self.snapshot = Some((PathBuf::from(path), 0));
-        if let Ok(f) = std::env::var("DECKWRIGHT_SNAP_FN") {
+        if let Ok(f) = std::env::var("PPTSHOWTOOLS_SNAP_FN") {
             if let Some(found) = FUNCTIONS.iter().find(|x| x.title() == f) {
                 self.set_function(*found);
             }
         }
-        if let Ok(files) = std::env::var("DECKWRIGHT_SNAP_FILES") {
+        if let Ok(files) = std::env::var("PPTSHOWTOOLS_SNAP_FILES") {
             self.files = files.split('|').map(PathBuf::from).collect();
-            self.selected = std::env::var("DECKWRIGHT_SNAP_SEL").ok().and_then(|s| s.parse().ok());
+            self.selected = std::env::var("PPTSHOWTOOLS_SNAP_SEL").ok().and_then(|s| s.parse().ok());
         }
-        if std::env::var("DECKWRIGHT_SNAP_SETTINGS").is_ok() {
+        if std::env::var("PPTSHOWTOOLS_SNAP_SETTINGS").is_ok() {
             self.show_settings = true;
         }
-        if std::env::var("DECKWRIGHT_SNAP_ALERT").is_ok() {
+        if std::env::var("PPTSHOWTOOLS_SNAP_ALERT").is_ok() {
             self.alert = Some(Alert { title: "The import is not correct".into(), text: "Old.pptx:\nslide 1: text missing or changed.".into(), buttons: vec!["OK"] });
         }
     }
@@ -937,21 +937,21 @@ fn fonts(ctx: &egui::Context) {
 }
 
 pub fn run() -> std::result::Result<(), String> {
-    let size = std::env::var("DECKWRIGHT_SNAP_SIZE").ok().and_then(|v| v.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]))).unwrap_or([850.0, 650.0]);
-    let mut viewport = egui::ViewportBuilder::default().with_title("Deckwright").with_app_id("Deckwright").with_inner_size(size).with_min_inner_size([700.0, 520.0]).with_drag_and_drop(true);
+    let size = std::env::var("PPTSHOWTOOLS_SNAP_SIZE").ok().and_then(|v| v.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?]))).unwrap_or([850.0, 650.0]);
+    let mut viewport = egui::ViewportBuilder::default().with_title("PPT Show Tools").with_app_id("PPT Show Tools").with_inner_size(size).with_min_inner_size([700.0, 520.0]).with_drag_and_drop(true);
     if let Ok(icon) = eframe::icon_data::from_png_bytes(include_bytes!("../assets/icon-256.png")) {
         viewport = viewport.with_icon(std::sync::Arc::new(icon));
     }
     let options = eframe::NativeOptions { viewport, ..Default::default() };
     eframe::run_native(
-        "Deckwright",
+        "PPT Show Tools",
         options,
         Box::new(|cc| {
             fonts(&cc.egui_ctx);
-            if let Some(scale) = std::env::var("DECKWRIGHT_SNAP_SCALE").ok().and_then(|v| v.parse::<f32>().ok()) {
+            if let Some(scale) = std::env::var("PPTSHOWTOOLS_SNAP_SCALE").ok().and_then(|v| v.parse::<f32>().ok()) {
                 cc.egui_ctx.set_pixels_per_point(scale);
             }
-            match std::env::var("DECKWRIGHT_SNAP_THEME").as_deref() {
+            match std::env::var("PPTSHOWTOOLS_SNAP_THEME").as_deref() {
                 Ok("light") => cc.egui_ctx.set_theme(egui::ThemePreference::Light),
                 Ok("dark") => cc.egui_ctx.set_theme(egui::ThemePreference::Dark),
                 _ => cc.egui_ctx.set_theme(egui::ThemePreference::System),

@@ -2,10 +2,10 @@
 import tempfile,zipfile,subprocess,unittest
 from pathlib import Path
 import os
-# DECKWRIGHT_BIN runs the same suite against another build, such as the Windows engine.
-BIN=Path(os.environ.get('DECKWRIGHT_BIN') or os.environ.get('PPTMERGER_BIN') or Path(__file__).resolve().parents[1]/'dist/Deckwright.app/Contents/MacOS/Deckwright')
+# PPTSHOWTOOLS_BIN runs the same suite against another build, such as the Windows engine.
+BIN=Path(os.environ.get('PPTSHOWTOOLS_BIN') or os.environ.get('PPTMERGER_BIN') or Path(__file__).resolve().parents[1]/'dist/PPT Show Tools.app/Contents/MacOS/PPTShowTools')
 # Most tests read <output>.report.json beside the output; test_reports checks the real behaviour.
-os.environ.setdefault("DECKWRIGHT_REPORTS_NEXT_TO_OUTPUT", "1")
+os.environ.setdefault("PPTSHOWTOOLS_REPORTS_NEXT_TO_OUTPUT", "1")
 def fixture(path,width=12192000,height=6858000):
  with zipfile.ZipFile(path,'w') as z:
   z.writestr('ppt/presentation.xml',f'<p:presentation xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships"><p:sldIdLst><p:sldId id="256" r:id="rId1"/></p:sldIdLst><p:sldSz cx="{width}" cy="{height}"/></p:presentation>')

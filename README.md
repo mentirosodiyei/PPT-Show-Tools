@@ -1,6 +1,8 @@
-# Deckwright
+# PPT Show Tools
 
-Deckwright is a desktop app for macOS and Windows that works on PowerPoint files without opening PowerPoint. Every operation creates a new file, never changes the original, and checks the result against the source before reporting success.
+PPT Show Tools is a desktop app for macOS and Windows that works on PowerPoint files without opening PowerPoint. Every operation creates a new file, never changes the original, and checks the result against the source before reporting success.
+
+Up to version 0.8.0 the app was called **Deckwright**. PPT Show Tools brings over its slide-size setting; the Windows installer also removes the old Deckwright installation.
 
 ## Functions
 
@@ -29,7 +31,7 @@ When a merge combines presentations of different sizes, each one is adapted to t
 - Picture backgrounds fill the new slide and overflow on the sides that no longer fit, without stretching.
 - Animations, motion paths and transitions are unchanged (PowerPoint measures them as fractions of the slide).
 
-Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\Deckwright\settings.json` (the portable version keeps it only while it is open).
+Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\PPT Show Tools\settings.json` (the portable version keeps it only while it is open).
 
 ## Checks and reports
 
@@ -37,13 +39,13 @@ Nothing is written next to the files you convert. Reports and error logs go to a
 
 | Version | Reports and logs |
 |---|---|
-| macOS | `~/Library/Logs/Deckwright` |
-| Windows, installed | `%LOCALAPPDATA%\Deckwright\Logs` (removed by the uninstaller) |
+| macOS | `~/Library/Logs/PPT Show Tools` |
+| Windows, installed | `%LOCALAPPDATA%\PPT Show Tools\Logs` (removed by the uninstaller) |
 | Windows, portable zip | None: it writes no reports, logs or settings file |
 
 **Open report** in the app opens the report of the last conversion. Each report holds slide order and count, text, animation and timing trees, transitions, notes, SHA-256 of media/fonts/embedded objects, content types, unique IDs and internal relationships. Packages are treated as untrusted input: ZIP paths, symbolic links, duplicate entries and oversized archives are refused.
 
-For scripts, `DECKWRIGHT_REPORTS_NEXT_TO_OUTPUT=1` writes `<output>.report.json` beside the output instead, and `DECKWRIGHT_LOG_DIR` changes the logs folder.
+For scripts, `PPTSHOWTOOLS_REPORTS_NEXT_TO_OUTPUT=1` writes `<output>.report.json` beside the output instead, and `PPTSHOWTOOLS_LOG_DIR` changes the logs folder.
 
 The checks are structural. They do not certify visual fidelity, playback, fonts or SmartArt/OLE rendering; review the result in PowerPoint.
 
@@ -52,29 +54,29 @@ The checks are structural. They do not certify visual fidelity, playback, fonts 
 **macOS** (Swift/SwiftUI, macOS 14+), as two separate apps:
 
 ```sh
-./build.sh   # → dist/Deckwright-<version>-AppleSilicon.dmg (arm64) and dist/Deckwright-<version>-Intel.dmg (x86_64)
+./build.sh   # → dist/PPTShowTools-<version>-AppleSilicon.dmg (arm64) and dist/PPTShowTools-<version>-Intel.dmg (x86_64)
 ```
 
-The Apple Silicon app contains no Intel code, so it never runs through Rosetta, which macOS 28 removes. Intel Macs are supported up to macOS 26. Each DMG holds the app and a link to Applications: open it and drag Deckwright onto Applications.
+The Apple Silicon app contains no Intel code, so it never runs through Rosetta, which macOS 28 removes. Intel Macs are supported up to macOS 26. Each DMG holds the app and a link to Applications: open it and drag PPT Show Tools onto Applications.
 
 **Windows** (Rust, built on the Mac with `cargo-xwin` and NSIS):
 
 ```sh
-windows/build-windows.sh   # → dist/windows/Deckwright-Setup-<version>.exe and a portable zip
+windows/build-windows.sh   # → dist/windows/PPTShowTools-Setup-<version>.exe and a portable zip
 ```
 
-Build caches live in `~/Library/Caches/Deckwright-*`, outside synced folders.
+Build caches live in `~/Library/Caches/PPTShowTools-*`, outside synced folders.
 
 ## Command line
 
 Both builds accept the same commands (used by the test suite):
 
 ```sh
-Deckwright --merge [--size WxH] output.pptx input1.pptx input2.pptx […]
-Deckwright --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]
-Deckwright --resize [--size WxH] output.pptx input.pptx
-Deckwright --pdf-to-ppt [--size WxH] output.pptx input.pdf
-Deckwright --extract-notes output.pptx input.pptx
+PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]
+PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]
+PPTShowTools --resize [--size WxH] output.pptx input.pptx
+PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf
+PPTShowTools --extract-notes output.pptx input.pptx
 ```
 
 `--size` takes pixels (`4800x1344`) or `auto`. `--fit-non169` is still accepted by older scripts and ignored.
@@ -85,7 +87,7 @@ Deckwright --extract-notes output.pptx input.pptx
 cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports
 ```
 
-`DECKWRIGHT_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.
+`PPTSHOWTOOLS_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.
 
 ## Status
 

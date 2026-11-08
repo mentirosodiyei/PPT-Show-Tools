@@ -5,7 +5,7 @@ struct OfficePipeline {
     static func prepare(inputs:[URL],destination:URL) throws -> OfficePreparation {
         let fm=FileManager.default
         guard inputs.count>=2,!fm.fileExists(atPath:destination.path) else {try fail("Two inputs and a new preparation folder are required.")}
-        let temp=fm.temporaryDirectory.appendingPathComponent("Deckwright-Office-"+UUID().uuidString)
+        let temp=fm.temporaryDirectory.appendingPathComponent("PPTShowTools-Office-"+UUID().uuidString)
         try fm.createDirectory(at:temp,withIntermediateDirectories:true);defer{try? fm.removeItem(at:temp)}
         var roots:[URL]=[],docs:[XMLDocument]=[],sizes:[(Int64,Int64)]=[]
         for (i,input) in inputs.enumerated() {
@@ -31,7 +31,7 @@ struct OfficePipeline {
     // PowerPoint renames parts and relationship IDs when it imports/saves.
     // Compare ordered slide features and reachable resources, not ZIP paths.
     static func verify(inputs:[URL],output:URL) throws -> [FileValidation] {
-        let fm=FileManager.default,temp=fm.temporaryDirectory.appendingPathComponent("Deckwright-OfficeCheck-"+UUID().uuidString)
+        let fm=FileManager.default,temp=fm.temporaryDirectory.appendingPathComponent("PPTShowTools-OfficeCheck-"+UUID().uuidString)
         try fm.createDirectory(at:temp,withIntermediateDirectories:true);defer{try? fm.removeItem(at:temp)}
         let merged=temp.appendingPathComponent("merged");try fm.createDirectory(at:merged,withIntermediateDirectories:true)
         try extractPackage(output,to:merged);let outputSlides=try orderedParts(merged)

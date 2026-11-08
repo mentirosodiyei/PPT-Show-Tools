@@ -66,7 +66,7 @@ use std::os::windows::process::CommandExt;
 #[cfg(windows)]
 fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)> {
     use std::io::Read;
-    let temp = TempDir::new("Deckwright-PowerPointScript")?;
+    let temp = TempDir::new("PPTShowTools-PowerPointScript")?;
     let script = temp.path().join("desa.ps1");
     // BOM: Windows PowerShell 5 reads scripts without it as ANSI.
     let mut bytes = b"\xEF\xBB\xBF".to_vec();
@@ -141,7 +141,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
     if output.exists() || crate::reports::collides(output, &[".report.json", ".report.txt"]) {
         return fail("The output file or its report already exists. Choose another name.");
     }
-    let temp = TempDir::new("Deckwright-PowerPoint")?;
+    let temp = TempDir::new("PPTShowTools-PowerPoint")?;
     let intermediate = temp.path().join("open-xml-merge.pptx");
     progress("Merging and checking…".into());
     let open_xml = crate::merge::merge_with(inputs, &intermediate, fixed, false)?;
@@ -182,7 +182,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
         .collect();
     let passed = checks.iter().all(|c| c.issues.is_empty());
     let report = PowerPointMergeReport {
-        engine: "Deckwright-OpenXML+PowerPoint-COM-v0.8.0-windows".into(),
+        engine: "PPTShowTools-OpenXML+PowerPoint-COM-v0.9.0-windows".into(),
         input_files: inputs.iter().map(|p| p.display().to_string()).collect(),
         output: output.display().to_string(),
         open_xml,
@@ -193,7 +193,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
     };
     let written = (|| -> Result<()> {
         crate::reports::write(output, ".report.json", &crate::to_json(&report)?)?;
-        let mut lines = vec!["DECKWRIGHT — OPEN XML MERGE SAVED WITH POWERPOINT".to_string(), if report.passed() { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new()];
+        let mut lines = vec!["PPTSHOWTOOLS — OPEN XML MERGE SAVED WITH POWERPOINT".to_string(), if report.passed() { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new()];
         for (i, check) in report.validation().iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
             lines.push(if check.issues.is_empty() { "STRUCTURE: checks passed; this is not full fidelity." } else { "IMPORT NOT CORRECT" }.into());

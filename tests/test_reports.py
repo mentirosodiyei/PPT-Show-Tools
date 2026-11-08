@@ -8,7 +8,7 @@ from test_slide_size import deck
 WINDOWS_ENGINE = 'windows-target' in str(BIN)
 
 def run(*args, **env):
-    clean = {k: v for k, v in os.environ.items() if k not in ('DECKWRIGHT_REPORTS_NEXT_TO_OUTPUT', 'DECKWRIGHT_LOG_DIR')}
+    clean = {k: v for k, v in os.environ.items() if k not in ('PPTSHOWTOOLS_REPORTS_NEXT_TO_OUTPUT', 'PPTSHOWTOOLS_LOG_DIR')}
     return subprocess.run([str(BIN), *map(str, args)], capture_output=True, text=True, env={**clean, **env})
 
 class Reports(unittest.TestCase):
@@ -22,10 +22,10 @@ class Reports(unittest.TestCase):
             os.utime(old, (month, month))
             a, b = work / 'a.pptx', work / 'b.pptx'
             fixture(a); deck(b, 9144000, 6858000)
-            self.assertEqual(run('--merge', work / 'merged.pptx', a, b, DECKWRIGHT_LOG_DIR=str(logs)).returncode, 0)
-            self.assertEqual(run('--resize', work / 'wide.pptx', b, DECKWRIGHT_LOG_DIR=str(logs)).returncode, 0)
+            self.assertEqual(run('--merge', work / 'merged.pptx', a, b, PPTSHOWTOOLS_LOG_DIR=str(logs)).returncode, 0)
+            self.assertEqual(run('--resize', work / 'wide.pptx', b, PPTSHOWTOOLS_LOG_DIR=str(logs)).returncode, 0)
             bad = work / 'bad.pptx'; bad.write_bytes(b'not a zip')
-            self.assertEqual(run('--extract-notes', work / 'notes.pptx', bad, DECKWRIGHT_LOG_DIR=str(logs)).returncode, 1)
+            self.assertEqual(run('--extract-notes', work / 'notes.pptx', bad, PPTSHOWTOOLS_LOG_DIR=str(logs)).returncode, 1)
             self.assertEqual(sorted(p.name for p in work.iterdir()), ['a.pptx', 'b.pptx', 'bad.pptx', 'merged.pptx', 'wide.pptx'])
             names = sorted(p.name for p in logs.iterdir())
             self.assertNotIn('old.report.json', names)  # older than 30 days
@@ -33,7 +33,7 @@ class Reports(unittest.TestCase):
             self.assertTrue(any(n.startswith('merged-') and n.endswith('.report.json') for n in names), names)
             self.assertTrue(any(n.startswith('merged-') and n.endswith('.report.txt') for n in names), names)
             self.assertTrue(any(n.startswith('wide-') and n.endswith('.report.json') for n in names), names)
-            self.assertTrue(any(n.startswith('Deckwright-ERROR-') for n in names), names)
+            self.assertTrue(any(n.startswith('PPTShowTools-ERROR-') for n in names), names)
 
     @unittest.skipUnless(WINDOWS_ENGINE, 'portable copies exist only on Windows')
     def test_portable_writes_nothing_but_the_output(self):

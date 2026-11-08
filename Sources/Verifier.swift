@@ -277,7 +277,7 @@ struct PackageVerifier {
     }
 
     static func inspect(inputs: [URL], output: URL) throws -> [FileValidation] {
-        let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("Deckwright-Check-" + UUID().uuidString)
+        let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("PPTShowTools-Check-" + UUID().uuidString)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true); defer { try? fm.removeItem(at: temp) }
         var snapshots: [PackageSnapshot] = []
         for (i, input) in inputs.enumerated() {

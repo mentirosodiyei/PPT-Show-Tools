@@ -99,8 +99,8 @@ pub fn pdf_to_ppt(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Res
     if !height.is_finite() || width < 72.0 || height < 72.0 {
         return fail("PDF page proportion not supported by PowerPoint (each side must be 1–56 in).");
     }
-    let root = TempDir::new("Deckwright-Tools")?;
-    let staging = TempDir::new("Deckwright-Tools")?;
+    let root = TempDir::new("PPTShowTools-Tools")?;
+    let staging = TempDir::new("PPTShowTools-Tools")?;
     let staged = staging.path().join("result.pptx");
     let mut deck = SimpleDeck::new(root.path(), width, height)?;
     let mut pages = vec![];
@@ -116,7 +116,7 @@ pub fn pdf_to_ppt(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Res
         pages.push(ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] });
     }
     deck.finish(&staged)?;
-    let check = TempDir::new("Deckwright-Tools")?;
+    let check = TempDir::new("PPTShowTools-Tools")?;
     unpack(&staged, check.path())?;
     if ordered_parts(check.path())?.len() != count {
         return fail("The slide count does not match the PDF pages.");
@@ -184,9 +184,9 @@ pub fn extract_notes(input: &Path, output: &Path) -> Result<ToolReport> {
     if extension(output) != "pptx" {
         return fail("The notes presentation is saved as PPTX.");
     }
-    let source = TempDir::new("Deckwright-Tools")?;
-    let root = TempDir::new("Deckwright-Tools")?;
-    let staging = TempDir::new("Deckwright-Tools")?;
+    let source = TempDir::new("PPTShowTools-Tools")?;
+    let root = TempDir::new("PPTShowTools-Tools")?;
+    let staging = TempDir::new("PPTShowTools-Tools")?;
     let staged = staging.path().join("result.pptx");
     unpack(input, source.path())?;
     let slides = ordered_parts(source.path())?;
@@ -210,7 +210,7 @@ pub fn extract_notes(input: &Path, output: &Path) -> Result<ToolReport> {
         pages.push(ToolPage { source_page: i + 1, font_size: Some(display_size), empty: text.is_empty(), warnings });
     }
     deck.finish(&staged)?;
-    let check = TempDir::new("Deckwright-Tools")?;
+    let check = TempDir::new("PPTShowTools-Tools")?;
     unpack(&staged, check.path())?;
     let actual = ordered_parts(check.path())?;
     if actual.len() != slides.len() {
@@ -248,7 +248,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
     if extension(input) != extension(output) {
         return fail("Keep the original's extension (PPTX or PPTM).");
     }
-    let root = TempDir::new("Deckwright-Tools")?;
+    let root = TempDir::new("PPTShowTools-Tools")?;
     unpack(input, root.path())?;
     let before = PackageSnapshot::capture(root.path())?;
     let mut pres = read_xml(root.path(), "ppt/presentation.xml")?;
@@ -272,10 +272,10 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
     };
     require_valid_slide_size(target)?;
     scaler::normalize(root.path(), &mut pres, (w, h), target)?;
-    let work = TempDir::new("Deckwright-Tools")?;
+    let work = TempDir::new("PPTShowTools-Tools")?;
     let archive = work.path().join("result.zip");
     zip_dir(root.path(), &archive)?;
-    let check = TempDir::new("Deckwright-Tools")?;
+    let check = TempDir::new("PPTShowTools-Tools")?;
     extract(&archive, check.path())?;
     let checks = verify(std::slice::from_ref(&before), &[input.to_path_buf()], check.path())?;
     let issues: Vec<String> = checks.iter().flat_map(|c| c.issues.clone()).collect();

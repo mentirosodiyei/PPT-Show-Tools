@@ -1,12 +1,12 @@
 [package]
-name = "deckwright"
-version = "0.8.0"
+name = "pptshowtools"
+version = "0.9.0"
 edition = "2021"
-description = "Deckwright for Windows: merge presentations, PDF to PowerPoint, resize slides and extract notes"
+description = "PPT Show Tools for Windows: merge presentations, PDF to PowerPoint, resize slides and extract notes"
 build = "build.rs"
 
 [[bin]]
-name = "Deckwright"
+name = "PPTShowTools"
 path = "src/main.rs"
 
 [dependencies]

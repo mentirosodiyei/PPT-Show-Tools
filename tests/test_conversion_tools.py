@@ -91,5 +91,5 @@ class ConversionToolsTests(unittest.TestCase):
   with tempfile.TemporaryDirectory() as d:
    a,o=Path(d)/'bad.pdf',Path(d)/'out.pptx';a.write_bytes(b'not a pdf')
    r=subprocess.run([str(BIN),'--pdf-to-ppt',str(o),str(a)],capture_output=True,text=True)
-   self.assertNotEqual(r.returncode,0);self.assertFalse(o.exists());self.assertTrue(list(Path(d).glob('Deckwright-ERROR-*.log')))
+   self.assertNotEqual(r.returncode,0);self.assertFalse(o.exists());self.assertTrue(list(Path(d).glob('PPTShowTools-ERROR-*.log')))
 if __name__=='__main__':unittest.main()
