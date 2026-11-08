@@ -43,9 +43,11 @@ The files a user opens (PPTX, PPTM, PDF) may come from anyone. Opening one must 
 ## Added after the review: blurred video backgrounds
 
 - **macOS:** the blurred copy of a video is made with AVFoundation and Core Image, which are part of the system.
-- **Windows:** FFmpeg is used if the user installed it.
+- **Windows:** FFmpeg ships with the app.
+  - It is pinned to one dated release and verified against the checksum published with it before packaging.
+  - The app runs the `ffmpeg.exe` next to it only if its SHA-256 matches the one compiled into the app, so a file planted next to the portable app is never run.
+  - Otherwise it falls back to an FFmpeg the user installed.
   - It is looked for only in `PPTSHOWTOOLS_FFMPEG`, in PATH folders (never the app's own folder or the current folder) and in the usual install folders (WinGet, Chocolatey, Scoop, Program Files).
-  - It is looked for next to the app only when the app is installed.
   - It is started with an argument list, never through a shell, and stopped after 30 minutes.
   - FFmpeg reads the untrusted video, so its own security matters: keep it up to date.
 - **Original video:** never modified; the copy is a new file inside the presentation.

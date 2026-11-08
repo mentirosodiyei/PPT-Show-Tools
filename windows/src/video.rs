@@ -53,19 +53,31 @@ pub fn blur_sigma(height: u32) -> f32 {
     0.15 * height as f32
 }
 
-/// FFmpeg, from places a user installs it to. Never from the app's own folder
-/// unless the app is installed (a portable app in Downloads could be next to a
-/// planted file), and never from the current folder.
+/// SHA-256 of the FFmpeg shipped with the app, recorded when it was built.
+const BUNDLED_FFMPEG_SHA256: Option<&str> = option_env!("PPTSHOWTOOLS_BUNDLED_FFMPEG_SHA256");
+
+/// FFmpeg: the copy shipped next to the app, accepted only if it is exactly
+/// the file the app was built with (a portable app in Downloads could sit next
+/// to a planted ffmpeg.exe); otherwise one the user installed. Never from the
+/// current folder.
 pub fn ffmpeg() -> Option<PathBuf> {
+    static FOUND: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
     if let Some(p) = std::env::var_os("PPTSHOWTOOLS_FFMPEG").map(PathBuf::from) {
         return p.is_file().then_some(p);
     }
+    FOUND.get_or_init(find_ffmpeg).clone()
+}
+
+fn find_ffmpeg() -> Option<PathBuf> {
     let name = if cfg!(windows) { "ffmpeg.exe" } else { "ffmpeg" };
     let exe_dir = std::env::current_exe().ok().and_then(|e| e.parent().map(Path::to_path_buf));
-    let mut dirs: Vec<PathBuf> = vec![];
-    if crate::reports::installed() {
-        dirs.extend(exe_dir.clone());
+    if let (Some(dir), Some(expected)) = (&exe_dir, BUNDLED_FFMPEG_SHA256) {
+        let bundled = dir.join(name);
+        if bundled.is_file() && crate::package::checksum_file(&bundled).is_ok_and(|h| h.eq_ignore_ascii_case(expected)) {
+            return Some(bundled);
+        }
     }
+    let mut dirs: Vec<PathBuf> = vec![];
     let cwd = std::env::current_dir().ok();
     if let Some(path) = std::env::var_os("PATH") {
         for d in std::env::split_paths(&path) {
@@ -86,13 +98,24 @@ pub fn ffmpeg() -> Option<PathBuf> {
     dirs.into_iter().map(|d| d.join(name)).find(|p| p.is_file())
 }
 
+/// H.264 encoders, best first: x264 (GPL builds), the encoder built into
+/// Windows (Media Foundation; the LGPL build shipped with the app) and OpenH264.
+const ENCODERS: [&[&str]; 3] = [&["-c:v", "libx264", "-preset", "veryfast", "-crf", "30"], &["-c:v", "h264_mf", "-b:v", "1500k"], &["-c:v", "libopenh264", "-b:v", "1500k"]];
+
 /// Blurred, silent copy of a video in the slide's proportion. False if FFmpeg is missing or fails.
 fn blurred_video(input: &Path, output: &Path, size: (u32, u32)) -> bool {
     let Some(ffmpeg) = ffmpeg() else { return false };
+    ENCODERS.iter().any(|encoder| {
+        let _ = std::fs::remove_file(output);
+        encode(&ffmpeg, input, output, size, encoder)
+    })
+}
+
+fn encode(ffmpeg: &Path, input: &Path, output: &Path, size: (u32, u32), encoder: &[&str]) -> bool {
     let (w, h) = size;
     let filter = format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma={:.1},format=yuv420p", blur_sigma(h));
     let mut command = std::process::Command::new(ffmpeg);
-    command.args(["-nostdin", "-y", "-loglevel", "error", "-i"]).arg(input).args(["-an", "-vf", &filter, "-c:v", "libx264", "-preset", "veryfast", "-crf", "30", "-movflags", "+faststart"]).arg(output);
+    command.args(["-nostdin", "-y", "-loglevel", "error", "-i"]).arg(input).args(["-an", "-vf", &filter]).args(encoder).args(["-movflags", "+faststart"]).arg(output);
     command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {

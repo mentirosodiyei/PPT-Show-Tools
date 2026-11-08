@@ -66,6 +66,10 @@ Section "PPT Show Tools" SecMain
   SetOutPath "$INSTDIR"
   File "/oname=PPTShowTools.exe" "${EXE}"
   File "/oname=PPTShowTools.ico" "..\assets\app.ico"
+  ; FFmpeg (LGPL) for the blurred video backgrounds; see FFMPEG-NOTICE.txt.
+  File "/oname=ffmpeg.exe" "${FFMPEG}\ffmpeg.exe"
+  File "/oname=FFMPEG-LICENSE.txt" "${FFMPEG}\LICENSE.txt"
+  File "/oname=FFMPEG-NOTICE.txt" "${FFMPEG}\FFMPEG-NOTICE.txt"
   ; Marks this copy as installed: reports and logs go to %LOCALAPPDATA%\PPT Show Tools\Logs
   ; (deleted after 30 days). The portable zip has no marker and writes nothing.
   FileOpen $0 "$INSTDIR\PPTShowTools.installed" w
@@ -103,6 +107,9 @@ Section "Uninstall"
   SetShellVarContext current
   Delete "$INSTDIR\PPTShowTools.exe"
   Delete "$INSTDIR\PPTShowTools.ico"
+  Delete "$INSTDIR\ffmpeg.exe"
+  Delete "$INSTDIR\FFMPEG-LICENSE.txt"
+  Delete "$INSTDIR\FFMPEG-NOTICE.txt"
   Delete "$INSTDIR\PPTShowTools.installed"
   Delete "$INSTDIR\Uninstall PPT Show Tools.exe"
   RMDir "$INSTDIR"

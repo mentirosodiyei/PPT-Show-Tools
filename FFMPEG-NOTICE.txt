@@ -1,0 +1,18 @@
+PPT Show Tools for Windows includes FFmpeg (ffmpeg.exe), used only to make the
+blurred background copy of a video when slides are resized.
+
+FFmpeg is free software licensed under the GNU Lesser General Public License
+(LGPL) version 2.1 or later; its licence is in FFMPEG-LICENSE.txt. It is a
+separate program: PPT Show Tools runs it, it is not linked into the app, and it
+can be replaced by any other FFmpeg build. (The app uses its own copy only if it
+is the exact file shipped; otherwise it uses one installed on the computer.)
+
+Build: ffmpeg-n9.0.2-48-gd4070a14ce-win64-lgpl-9.0 (FFmpeg 9.0.2, LGPL build),
+from https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-11-08-12-35
+
+Source code:
+- FFmpeg: https://github.com/FFmpeg/FFmpeg/tree/d4070a14ce (release/9.0)
+  and https://ffmpeg.org/download.html
+- Build scripts used to make this binary: https://github.com/BtbN/FFmpeg-Builds
+
+FFmpeg is a trademark of Fabrice Bellard, originator of the FFmpeg project.

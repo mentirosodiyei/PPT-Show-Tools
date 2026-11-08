@@ -30,7 +30,7 @@ When a merge combines presentations of different sizes, each one is adapted to t
 - Text boxes and placeholders follow the new proportion, so titles and body text use the new width or height.
 - Shapes that span the slide (bars) keep spanning it. Pictures that fill the slide, and picture backgrounds, are never cropped or stretched: the whole picture is shown, and the new margins take the colours of its edges, fading into a soft wash, so the join does not show. Formats other than PNG and JPEG, and pictures already cropped, keep their own proportion instead.
 - Everything else keeps its size and stays anchored where it was: a logo in a corner stays in that corner, a centred photo stays centred.
-- Videos are never modified. A video that filled the slide keeps its own proportion, centred; behind it, a copy covers the whole slide without distortion (cropped only outside the slide), heavily blurred and silent, and plays and pauses with it. macOS makes the copy itself (AVFoundation). Windows uses [FFmpeg](https://ffmpeg.org) if it is installed (for example `winget install Gyan.FFmpeg`); without it the background is a blurred still of the video's first frame, and the report says so.
+- Videos are never modified. A video that filled the slide keeps its own proportion, centred; behind it, a copy covers the whole slide without distortion (cropped only outside the slide), heavily blurred and silent, and plays and pauses with it. macOS makes the copy itself (AVFoundation). Windows uses [FFmpeg](https://ffmpeg.org), which ships with the installer and the portable zip (LGPL build; see `FFMPEG-NOTICE.txt`). The app uses that copy only if it is exactly the file it was built with; otherwise it looks for an FFmpeg installed on the computer, and without one the background is a blurred still of the video's first frame (the report says so).
 - Animations, motion paths and transitions are unchanged (PowerPoint measures them as fractions of the slide).
 
 Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\PPT Show Tools\settings.json` (the portable version keeps it only while it is open).
@@ -67,6 +67,8 @@ The Apple Silicon app contains no Intel code, so it never runs through Rosetta, 
 
 ```sh
 windows/build-windows.sh   # → dist/windows/PPTShowTools-Setup-<version>.exe and a portable zip
+# The first build downloads the pinned FFmpeg LGPL build (168 MB) into ~/Library/Caches/PPTShowTools-ffmpeg
+# and checks it against the checksum published with that release.
 ```
 
 Build caches live in `~/Library/Caches/PPTShowTools-*`, outside synced folders.
