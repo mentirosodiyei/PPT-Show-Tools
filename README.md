@@ -47,6 +47,8 @@ Nothing is written next to the files you convert. Reports and error logs go to a
 
 **Open report** in the app opens the report of the last conversion. Each report holds slide order and count, text, animation and timing trees, transitions, notes, SHA-256 of media/fonts/embedded objects, content types, unique IDs and internal relationships. Packages are treated as untrusted input: ZIP paths, symbolic links, duplicate entries and oversized archives are refused.
 
+A merge keeps only the first presentation's document properties and macros (macros only in a PPTM output); the others' are removed. Linked files or addresses outside the presentation are kept and listed in the report. See [docs/security-review-2026-11.md](docs/security-review-2026-11.md).
+
 For scripts, `PPTSHOWTOOLS_REPORTS_NEXT_TO_OUTPUT=1` writes `<output>.report.json` beside the output instead, and `PPTSHOWTOOLS_LOG_DIR` changes the logs folder.
 
 The checks are structural. They do not certify visual fidelity, playback, fonts or SmartArt/OLE rendering; review the result in PowerPoint.
@@ -86,7 +88,7 @@ PPTShowTools --extract-notes output.pptx input.pptx
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security
 ```
 
 `PPTSHOWTOOLS_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.

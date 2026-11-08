@@ -38,6 +38,8 @@ try { $app = New-Object -ComObject PowerPoint.Application } catch { [Console]::E
 $p = $null
 try {
   # ReadOnly = msoTrue, Untitled = msoFalse, WithWindow = msoFalse
+  # msoAutomationSecurityForceDisable: no macro of any kind runs in this file.
+  $app.AutomationSecurity = 3
   $p = $app.Presentations.Open($Source, -1, 0, 0)
   $n = $p.Slides.Count
   if ($n -ne $Expected) { throw "PowerPoint opened $n slides instead of $Expected." }
@@ -53,7 +55,7 @@ try {
 
 #[cfg(windows)]
 pub fn available() -> bool {
-    std::process::Command::new("reg").args(["query", r"HKCR\PowerPoint.Application"]).creation_flags(0x0800_0000).output().map(|o| o.status.success()).unwrap_or(false)
+    std::process::Command::new(crate::system_program("reg.exe")).args(["query", r"HKCR\PowerPoint.Application"]).creation_flags(0x0800_0000).output().map(|o| o.status.success()).unwrap_or(false)
 }
 #[cfg(not(windows))]
 pub fn available() -> bool {
@@ -76,7 +78,7 @@ fn resave(source: &Path, target: &Path, expected: usize) -> Result<(usize, bool)
     // also never start with "-", which PowerShell would read as a parameter.
     let source = std::path::absolute(source).or_else(|e| fail(e.to_string()))?;
     let target = std::path::absolute(target).or_else(|e| fail(e.to_string()))?;
-    let mut child = std::process::Command::new("powershell.exe")
+    let mut child = std::process::Command::new(crate::system_program("WindowsPowerShell\\v1.0\\powershell.exe"))
         .args(["-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File"])
         .arg(&script)
         .arg("-Source")
@@ -193,7 +195,7 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
     };
     let written = (|| -> Result<()> {
         crate::reports::write(output, ".report.json", &crate::to_json(&report)?)?;
-        let mut lines = vec!["PPTSHOWTOOLS — OPEN XML MERGE SAVED WITH POWERPOINT".to_string(), if report.passed() { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new()];
+        let mut lines = vec!["PPT SHOW TOOLS — OPEN XML MERGE SAVED WITH POWERPOINT".to_string(), if report.passed() { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new()];
         for (i, check) in report.validation().iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
             lines.push(if check.issues.is_empty() { "STRUCTURE: checks passed; this is not full fidelity." } else { "IMPORT NOT CORRECT" }.into());

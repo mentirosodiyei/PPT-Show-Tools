@@ -79,12 +79,18 @@ func extractPackage(_ input: URL, to dir: URL) throws {
     let entries = String(decoding: listing, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: true).map(String.init)
     guard !entries.isEmpty else { try fail("“\(name)” is not a valid PowerPoint ZIP package.") }
     guard entries.count <= maxPackageEntries else { try fail(tooLarge) }
-    var seen = Set<String>()
-    for entry in entries where !entry.hasSuffix("/") {
-        let segments = entry.split(separator: "/", omittingEmptySubsequences: false)
-        guard !entry.hasPrefix("/"), !entry.contains("\\"), !segments.contains(where: { $0 == ".." || $0 == "." }) else { try fail("“\(name)”: unsupported ZIP entry path: \(entry)") }
+    var seen = Set<String>(), folders = Set<String>()
+    for entry in entries {
+        let isFolder = entry.hasSuffix("/")
+        let segments = (isFolder ? String(entry.dropLast()) : entry).split(separator: "/", omittingEmptySubsequences: false)
+        guard !entry.hasPrefix("/"), !entry.contains("\\"), !segments.isEmpty, !segments.contains(where: { $0.isEmpty || $0 == ".." || $0 == "." }) else { try fail("“\(name)”: unsupported ZIP entry path: \(entry)") }
+        // Every folder on the way to an entry, so a file cannot also be used as a folder
+        // (the shape of an archive that writes through a symbolic link).
+        for depth in 1..<max(segments.count, 1) { folders.insert(segments.prefix(depth).joined(separator: "/").lowercased()) }
+        if isFolder { folders.insert(segments.joined(separator: "/").lowercased()); continue }
         guard seen.insert(entry.lowercased()).inserted else { try fail("“\(name)”: duplicate ZIP entry: \(entry)") }
     }
+    if let clash = seen.first(where: { folders.contains($0) }) { try fail("“\(name)”: unsupported ZIP entry path: \(clash)") }
     let (totalStatus, totals) = try capture("/usr/bin/zipinfo", ["-t", input.path])
     let numbers = String(decoding: totals, as: UTF8.self).split(whereSeparator: { !$0.isNumber }).compactMap { Int64($0) }
     guard totalStatus == 0, numbers.count >= 2 else { try fail("“\(name)” is not a valid PowerPoint ZIP package.") }
@@ -111,14 +117,70 @@ func extractPackage(_ input: URL, to dir: URL) throws {
         }
     }
 }
+/// Real parts nest a few dozen levels; a hostile part could exhaust the stack.
+let maxXMLDepth = 256
 /// Parts never contain a DTD; refusing one rules out entity expansion, and
-/// external entities are never loaded.
+/// external entities are never loaded. Only UTF-8 is accepted (PowerPoint
+/// writes nothing else), so a DTD cannot hide behind another encoding.
 func parseXML(at url: URL) throws -> XMLDocument {
-    let data = try Data(contentsOf: url)
-    if data.range(of: Data("<!DOCTYPE".utf8)) != nil || data.range(of: Data("<!doctype".utf8)) != nil {
-        try fail("\(url.lastPathComponent) contains a document type declaration (DTD), which PowerPoint files never use.")
+    let data = try Data(contentsOf: url), name = url.lastPathComponent
+    guard var text = String(data: data, encoding: .utf8) else { try fail("\(name): XML with an unsupported encoding (UTF-8 required).") }
+    if text.hasPrefix("\u{FEFF}") { text.removeFirst() }
+    if text.hasPrefix("<?xml"), let end = text.range(of: "?>") {
+        let declaration = text[..<end.lowerBound]
+        if let match = declaration.range(of: #"encoding\s*=\s*["'][^"']*["']"#, options: .regularExpression),
+           declaration[match].range(of: "utf-8", options: .caseInsensitive) == nil {
+            try fail("\(name): XML with an unsupported encoding (UTF-8 required).")
+        }
     }
+    if text.range(of: "<!DOCTYPE", options: .caseInsensitive) != nil {
+        try fail("\(name) contains a document type declaration (DTD), which PowerPoint files never use.")
+    }
+    if xmlNestingExceeds(data, limit: maxXMLDepth) { try fail("\(name): XML nested too deeply.") }
     return try XMLDocument(data: data, options: [.nodePreserveAll, .nodeLoadExternalEntitiesNever])
+}
+/// Element depth measured on the bytes, before any recursive parser sees them.
+func xmlNestingExceeds(_ data: Data, limit: Int) -> Bool {
+    data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) -> Bool in
+        let b = raw.bindMemory(to: UInt8.self), n = b.count
+        func find(_ token: [UInt8], from start: Int) -> Int {
+            var i = start
+            while i + token.count <= n {
+                if b[i] == token[0] && (0..<token.count).allSatisfy({ b[i + $0] == token[$0] }) { return i + token.count }
+                i += 1
+            }
+            return n
+        }
+        func starts(_ token: [UInt8], at i: Int) -> Bool {
+            i + token.count <= n && (0..<token.count).allSatisfy { b[i + $0] == token[$0] }
+        }
+        var i = 0, depth = 0
+        while i < n {
+            guard b[i] == UInt8(ascii: "<"), i + 1 < n else { i += 1; continue }
+            let next = b[i + 1]
+            if next == UInt8(ascii: "!") {
+                if starts(Array("<!--".utf8), at: i) { i = find(Array("-->".utf8), from: i + 4) }
+                else if starts(Array("<![CDATA[".utf8), at: i) { i = find(Array("]]>".utf8), from: i + 9) }
+                else { i = find([UInt8(ascii: ">")], from: i) }
+            } else if next == UInt8(ascii: "?") {
+                i = find(Array("?>".utf8), from: i)
+            } else if next == UInt8(ascii: "/") {
+                depth -= 1; i = find([UInt8(ascii: ">")], from: i)
+            } else {
+                var j = i + 1, quote: UInt8 = 0
+                while j < n {
+                    let c = b[j]
+                    if quote != 0 { if c == quote { quote = 0 } }
+                    else if c == UInt8(ascii: "\"") || c == UInt8(ascii: "'") { quote = c }
+                    else if c == UInt8(ascii: ">") { break }
+                    j += 1
+                }
+                if j < n, b[j - 1] != UInt8(ascii: "/") { depth += 1; if depth > limit { return true } }
+                i = j + 1
+            }
+        }
+        return false
+    }
 }
 func xml(_ root: URL, _ path: String) throws -> XMLDocument { try parseXML(at: root.appendingPathComponent(path)) }
 func children(_ e: XMLElement, _ local: String) -> [XMLElement] { (e.children ?? []).compactMap { $0 as? XMLElement }.filter { $0.localName == local } }
@@ -218,6 +280,30 @@ func insertInPresentationOrder(_ root: XMLElement, _ node: XMLElement) {
     root.addChild(node)
 }
 
+/// Parts of an imported presentation that nothing in the result uses: its document
+/// properties (authors, company, thumbnail) and its VBA project, which is never
+/// merged. They are removed instead of being carried along unused.
+let unusedImportedParts = ["docProps", "ppt/vbaProject.bin", "ppt/vbaData.xml", "ppt/_rels/vbaProject.bin.rels"]
+
+/// External targets PowerPoint loads by itself (linked pictures, media, OLE
+/// links); hyperlinks only open when clicked and are left out.
+func automaticExternalTargets(_ root: URL) -> [String] {
+    var found: [String] = []
+    guard let items = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else { return [] }
+    for case let url as URL in items where url.lastPathComponent.hasSuffix(".rels") {
+        guard let doc = try? parseXML(at: url), let rootElement = doc.rootElement() else { continue }
+        for e in children(rootElement, "Relationship") where attr(e, "TargetMode") == "External" && !attr(e, "Type").hasSuffix("/hyperlink") {
+            found.append(attr(e, "Target"))
+        }
+    }
+    return Array(Set(found)).sorted()
+}
+func externalLinkWarning(_ file: String, _ targets: [String]) -> String? {
+    guard !targets.isEmpty else { return nil }
+    let sample = targets.prefix(3).map { $0.count > 80 ? String($0.prefix(80)) + "…" : $0 }.joined(separator: ", ")
+    return "\(file): \(targets.count) linked file(s) or address(es) outside the presentation (\(sample)). PowerPoint may load them when the result is opened; check them if you do not trust the original."
+}
+
 struct OpenXMLMerger {
     /// writeReports false: the caller (PowerPoint save) writes its own report.
     func merge(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, writeReports: Bool = true) throws -> MergeReport {
@@ -268,6 +354,9 @@ struct OpenXMLMerger {
             "Check playback, editing, notes, fonts, external links and OLE objects in PowerPoint."
         ]
         warnings.append(contentsOf: scalingWarnings)
+        for (i, dir) in roots.enumerated() {
+            if let warning = externalLinkWarning(inputs[i].lastPathComponent, automaticExternalTargets(dir)) { warnings.append(warning) }
+        }
         let baseTypes = ct.rootElement()!
         // ST_SlideId allows 256…2147483647; reject anything that would overflow.
         let highestSlide = children(list(root, "sldIdLst")!, "sldId").compactMap { Int64(attr($0, "id")) }.max() ?? 255
@@ -306,6 +395,10 @@ struct OpenXMLMerger {
         // package is namespaced intact; relative references therefore remain unchanged.
         for i in 1..<roots.count {
             let source = roots[i], prefix = "pptMerger/source\(i)/"
+            let hadVBA = fm.fileExists(atPath: source.appendingPathComponent("ppt/vbaProject.bin").path)
+            for part in unusedImportedParts where fm.fileExists(atPath: source.appendingPathComponent(part).path) {
+                try fm.removeItem(at: source.appendingPathComponent(part))
+            }
             if notesTarget == nil {
                 let sr = try xml(source, "ppt/_rels/presentation.xml.rels")
                 if let e = children(sr.rootElement()!, "Relationship").first(where: { attr($0, "Type").hasSuffix("/notesMaster") }) {
@@ -411,7 +504,7 @@ struct OpenXMLMerger {
                 }
                 warnings.append("\(inputs[i].lastPathComponent): embedded fonts registered in the result. Check substitutions, usage rights and different variants with the same name.")
             }
-            if fm.fileExists(atPath: source.appendingPathComponent("ppt/vbaProject.bin").path) { warnings.append("\(inputs[i].lastPathComponent): VBA kept as an inactive resource; not merged into the output VBA project.") }
+            if hadVBA { warnings.append("\(inputs[i].lastPathComponent): its VBA project (macros) was removed; only the first file's macros are kept.") }
         }
         let hasMacros = fm.fileExists(atPath: base.appendingPathComponent("ppt/vbaProject.bin").path)
         if output.pathExtension.lowercased() == "pptx" && hasMacros { try fail("The first file contains VBA: save as PPTM to keep it.") }
@@ -443,7 +536,7 @@ struct OpenXMLMerger {
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try ReportStore.write(try encoder.encode(report), for: output, ".report.json")
-            var lines = ["PPTSHOWTOOLS — CHECKS PER FILE", report.structuralValidationPassed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", "", "Output size: \(describeSize(target))", ""]
+            var lines = ["PPT SHOW TOOLS — CHECKS PER FILE", report.structuralValidationPassed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", "", "Output size: \(describeSize(target))", ""]
             for (i, check) in validation.enumerated() {
                 lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT", "\(check.checkedSlides) slides; \(check.slidesWithAnimation) with animation; \(check.binaryResourcesChecked) resources checked."]
                 lines += check.checks.map { "Checked: " + $0 }

@@ -52,10 +52,13 @@ struct PresentationTools {
     static func logFailure(output:URL,error:Error) -> String {ReportStore.logFailure(output:output,error:error)}
     /// With a fixed size (Settings) the slides take it and every page is fitted
     /// whole; otherwise they take the first page's proportion.
+    /// Each page becomes an image; this bounds the time and disk space one PDF can take.
+    static let maxPDFPages=2000
     static func pdfToPPT(input:URL,output:URL,fixedSize:(Int64,Int64)?=nil) throws -> ToolReport {
         try requireNew(input,output)
         guard output.pathExtension.lowercased()=="pptx" else {try fail("The PDF output must be PPTX.")}
         guard let document=CGPDFDocument(input as CFURL),document.isUnlocked,document.numberOfPages>0 else {try fail("The PDF cannot be read, is locked or has no pages.")}
+        guard document.numberOfPages<=maxPDFPages else {try fail("The PDF has \(document.numberOfPages) pages; at most \(maxPDFPages) can be converted at once.")}
         guard let first=document.page(at:1) else {try fail("Cannot read the first page of the PDF.")}
         var firstSize=first.getBoxRect(.cropBox).size
         if abs(first.rotationAngle)%180==90 {firstSize=NSSize(width:firstSize.height,height:firstSize.width)}
@@ -220,7 +223,7 @@ struct PresentationTools {
         let outPres=try xml(check,"ppt/presentation.xml")
         guard let outSz=list(outPres.rootElement()!,"sldSz"),attr(outSz,"cx")==String(target.0),attr(outSz,"cy")==String(target.1) else{try fail("The expected slide size was not kept.")}
         let canvas=fit ? "Canvas \(describeSize(target)); content centred without enlarging, stretching or cropping" : "Canvas \(describeSize(target)); content scaled proportionally and centred, without stretching or cropping"
-        let r=ToolReport(operation:"Resize slides: \(describeSize((w,h))) → \(describeSize(target))",source:input.path,output:output.path,pages:before.slides.indices.map{ToolPage(sourcePage:$0+1,fontSize:nil,empty:false,warnings:[])},checks:[canvas,"Order, text, notes, animations, transitions and resources verified after saving"],limitations:["Margins remain when the proportion changes (for example 4:3 to 16:9); the layout is not redesigned to fill them.","Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."])
+        let r=ToolReport(operation:"Resize slides: \(describeSize((w,h))) → \(describeSize(target))",source:input.path,output:output.path,pages:before.slides.indices.map{ToolPage(sourcePage:$0+1,fontSize:nil,empty:false,warnings:[])},checks:[canvas,"Order, text, notes, animations, transitions and resources verified after saving"],limitations:["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped and other objects keep their size and place.","Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."])
         try publish(archive,r);return r
     }
 }

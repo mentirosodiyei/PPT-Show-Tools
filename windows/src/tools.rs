@@ -81,6 +81,11 @@ pub fn pdf_to_ppt(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Res
     if count == 0 {
         return fail("The PDF cannot be read, is locked or has no pages.");
     }
+    // Each page becomes an image; this bounds the time and disk space one PDF can take.
+    const MAX_PDF_PAGES: usize = 2000;
+    if count > MAX_PDF_PAGES {
+        return fail(format!("The PDF has {count} pages; at most {MAX_PDF_PAGES} can be converted at once."));
+    }
     let first = document.page_size(0)?;
     if first.0 <= 0.0 || first.1 <= 0.0 {
         return fail("Invalid PDF page size.");
@@ -297,7 +302,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
         output: output.display().to_string(),
         pages: (0..before.slides.len()).map(|i| ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] }).collect(),
         checks: vec![canvas, "Order, text, notes, animations, transitions and resources verified after saving".into()],
-        limitations: strings(&["Objects keep their size relative to the slide; when the proportion changes, text reflows in wider or narrower boxes. Review the result in PowerPoint.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
+        limitations: strings(&["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures spanning the slide are cropped and other objects keep their size and place.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
     };
     publish(&archive, &report)?;
     Ok(report)

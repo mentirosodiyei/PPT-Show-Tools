@@ -40,6 +40,15 @@ pub fn with_suffix(p: &Path, suffix: &str) -> PathBuf {
     PathBuf::from(s)
 }
 
+/// Names Windows maps to devices (CON, NUL, COM1…) or silently changes
+/// (trailing dot or space), and characters it does not allow in file names.
+fn windows_reserved(segment: &str) -> bool {
+    let stem = segment.split('.').next().unwrap_or("").trim_end().to_ascii_uppercase();
+    let device = matches!(stem.as_str(), "CON" | "PRN" | "AUX" | "NUL" | "CONIN$" | "CONOUT$")
+        || ((stem.starts_with("COM") || stem.starts_with("LPT")) && stem.len() == 4 && stem.chars().last().is_some_and(|c| c.is_ascii_digit() || "¹²³".contains(c)));
+    device || segment.ends_with('.') || segment.ends_with(' ') || segment.chars().any(|c| c < ' ' || "<>\"|?*".contains(c))
+}
+
 /// Untrusted packages: reject absolute or parent paths, links, encryption,
 /// duplicates (also case-insensitive, as on Windows) and archives that would
 /// expand beyond a sane size, before and while writing anything.
@@ -60,16 +69,25 @@ pub fn extract(input: &Path, dir: &Path) -> Result<()> {
         return fail(format!("“{name}” is too large or has too many entries to process safely."));
     }
     let mut seen = std::collections::HashSet::new();
+    let mut folders = std::collections::HashSet::new();
+    for i in 0..zip.len() {
+        let entry = zip.by_index_raw(i).map_err(|_| invalid())?;
+        let segments: Vec<String> = entry.name().map_err(|_| invalid())?.split('/').filter(|s| !s.is_empty()).map(|s| s.to_lowercase()).collect();
+        let parents = if entry.is_dir() { segments.len() } else { segments.len().saturating_sub(1) };
+        for depth in 1..=parents {
+            folders.insert(segments[..depth].join("/"));
+        }
+    }
     let mut written: u64 = 0;
     for i in 0..zip.len() {
         let mut entry = zip.by_index(i).map_err(|e| crate::Error::Fail(format!("“{name}”: unreadable ZIP entry ({e}).")))?;
-        let entry_name = entry.name().to_string();
+        let entry_name = entry.name().map_err(|_| invalid())?.to_string();
         let special = entry.unix_mode().map(|m| m & 0o170000 != 0o100000 && m & 0o170000 != 0o040000 && m & 0o170000 != 0).unwrap_or(false);
         if special {
             return fail(format!("“{name}” contains symbolic links or special entries, which a PowerPoint file cannot have: {entry_name}"));
         }
         let segments: Vec<&str> = entry_name.split('/').filter(|s| !s.is_empty()).collect();
-        let bad = entry_name.starts_with('/') || entry_name.contains('\\') || entry_name.contains(':') || segments.iter().any(|s| *s == ".." || *s == ".") || segments.is_empty();
+        let bad = entry_name.starts_with('/') || entry_name.contains('\\') || entry_name.contains(':') || segments.iter().any(|s| *s == ".." || *s == "." || windows_reserved(s)) || segments.is_empty();
         if bad {
             return fail(format!("“{name}”: unsupported ZIP entry path: {entry_name}"));
         }
@@ -80,6 +98,10 @@ pub fn extract(input: &Path, dir: &Path) -> Result<()> {
         }
         if !seen.insert(entry_name.to_lowercase()) {
             return fail(format!("“{name}”: duplicate ZIP entry: {entry_name}"));
+        }
+        // A file that is also used as a folder is the shape of an archive that writes through a link.
+        if folders.contains(&segments.iter().map(|s| s.to_lowercase()).collect::<Vec<_>>().join("/")) {
+            return fail(format!("“{name}”: unsupported ZIP entry path: {entry_name}"));
         }
         if let Some(parent) = target.parent() {
             fs::create_dir_all(parent).or_else(|e| fail(format!("Cannot extract “{name}”: {e}")))?;

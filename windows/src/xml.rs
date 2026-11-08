@@ -175,11 +175,23 @@ fn utf8(bytes: &[u8]) -> Result<String> {
     String::from_utf8(bytes.to_vec()).or_else(|_| fail("XML with an unsupported encoding (UTF-8 required)."))
 }
 
+/// Text and the references inside it form one text node, as before quick-xml
+/// reported references separately. Text outside the root is not kept.
+fn push_text(s: String, stack: &mut [Element]) {
+    if let Some(parent) = stack.last_mut() {
+        if let Some(Node::Text(last)) = parent.children.last_mut() {
+            last.push_str(&s);
+        } else {
+            parent.children.push(Node::Text(s));
+        }
+    }
+}
+
 impl Document {
     pub fn parse(data: &[u8]) -> Result<Document> {
         let data = data.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(data);
         if data.starts_with(b"\xFF\xFE") || data.starts_with(b"\xFE\xFF") {
-            return fail("UTF-16 XML is not supported.");
+            return fail("XML with an unsupported encoding (UTF-8 required).");
         }
         let text = std::str::from_utf8(data).or_else(|_| fail("XML with an unsupported encoding (UTF-8 required)."))?;
         let mut reader = Reader::from_str(text);
@@ -261,14 +273,39 @@ impl Document {
                     // XML end-of-line handling: CRLF and lone CR become LF.
                     let raw = utf8(&t)?.replace("\r\n", "\n").replace('\r', "\n");
                     let s = quick_xml::escape::unescape(&raw).or_else(|err| fail(format!("Invalid XML text: {err}")))?.into_owned();
-                    push(Node::Text(s), &mut stack, &mut prolog);
+                    push_text(s, &mut stack);
+                }
+                // References in text arrive on their own: only the five predefined
+                // entities and character references exist without a DTD.
+                Event::GeneralRef(r) => {
+                    let s = match r.resolve_char_ref() {
+                        Ok(Some(c)) => c.to_string(),
+                        Ok(None) => match utf8(&r)?.as_str() {
+                            "amp" => "&".into(),
+                            "lt" => "<".into(),
+                            "gt" => ">".into(),
+                            "quot" => "\"".into(),
+                            "apos" => "'".into(),
+                            other => return fail(format!("Invalid XML entity: &{other};")),
+                        },
+                        Err(err) => return fail(format!("Invalid XML entity: {err}")),
+                    };
+                    push_text(s, &mut stack);
                 }
                 Event::CData(t) => push(Node::CData(utf8(&t.into_inner())?), &mut stack, &mut prolog),
                 Event::Comment(t) => push(Node::Comment(utf8(&t.into_inner())?), &mut stack, &mut prolog),
                 Event::PI(t) => push(Node::PI(utf8(&t)?), &mut stack, &mut prolog),
                 // Parts never contain a DTD; refusing one rules out entity expansion.
                 Event::DocType(_) => return fail("The part contains a document type declaration (DTD), which PowerPoint files never use."),
-                Event::Decl(_) => {}
+                // PowerPoint writes UTF-8 only; another declared encoding would be read
+                // differently by Office than here.
+                Event::Decl(d) => {
+                    if let Some(Ok(enc)) = d.encoding() {
+                        if !enc.eq_ignore_ascii_case(b"utf-8") {
+                            return fail("XML with an unsupported encoding (UTF-8 required).");
+                        }
+                    }
+                }
                 Event::Eof => break,
             }
         }

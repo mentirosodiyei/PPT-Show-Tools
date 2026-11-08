@@ -888,7 +888,7 @@ impl eframe::App for App {
 fn open(path: &Path) {
     #[cfg(windows)]
     {
-        let _ = std::process::Command::new("explorer").arg(path).spawn();
+        let _ = std::process::Command::new(crate::windows_program("explorer.exe")).arg(path).spawn();
     }
     #[cfg(target_os = "macos")]
     {
@@ -899,7 +899,7 @@ fn reveal(path: &Path) {
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
-        let _ = std::process::Command::new("explorer").raw_arg(format!("/select,\"{}\"", path.display())).spawn();
+        let _ = std::process::Command::new(crate::windows_program("explorer.exe")).raw_arg(format!("/select,\"{}\"", path.display())).spawn();
     }
     #[cfg(target_os = "macos")]
     {

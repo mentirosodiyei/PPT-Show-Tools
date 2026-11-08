@@ -147,7 +147,29 @@ fn report_path(output: &str) -> String {
     reports::file(std::path::Path::new(output), ".report.json").map(|p| p.display().to_string()).unwrap_or_else(|| "none".into())
 }
 
+/// Programs are started from the Windows folders by full path: started by name,
+/// Windows would look in the app's own folder first (for example Downloads,
+/// next to the portable app), where a file of the same name could be planted.
+#[cfg(windows)]
+pub fn system_program(name: &str) -> std::path::PathBuf {
+    let mut buffer = [0u16; 260];
+    let n = unsafe { windows::Win32::System::SystemInformation::GetSystemDirectoryW(Some(&mut buffer)) } as usize;
+    std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..n.min(buffer.len())])).join(name)
+}
+#[cfg(windows)]
+pub fn windows_program(name: &str) -> std::path::PathBuf {
+    let mut buffer = [0u16; 260];
+    let n = unsafe { windows::Win32::System::SystemInformation::GetWindowsDirectoryW(Some(&mut buffer)) } as usize;
+    std::path::PathBuf::from(String::from_utf16_lossy(&buffer[..n.min(buffer.len())])).join(name)
+}
+
 fn main() {
+    // DLLs load only from System32, never from the app's folder or the current one.
+    #[cfg(windows)]
+    unsafe {
+        use windows::Win32::System::LibraryLoader::{SetDefaultDllDirectories, LOAD_LIBRARY_SEARCH_SYSTEM32};
+        let _ = SetDefaultDllDirectories(LOAD_LIBRARY_SEARCH_SYSTEM32);
+    }
     let args: Vec<String> = std::env::args().collect();
     if args.len() > 1 {
         #[cfg(windows)]

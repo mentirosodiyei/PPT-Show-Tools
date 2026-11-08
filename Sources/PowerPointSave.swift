@@ -137,7 +137,7 @@ struct PowerPointSave {
         do {
             let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
             try ReportStore.write(try encoder.encode(report), for: output, ".report.json")
-            var lines = ["PPTSHOWTOOLS — OPEN XML MERGE SAVED WITH POWERPOINT", passed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", ""]
+            var lines = ["PPT SHOW TOOLS — OPEN XML MERGE SAVED WITH POWERPOINT", passed ? "Structural checks passed. Visual and playback review pending." : "IMPORT NOT CORRECT: differences found.", ""]
             for (i, check) in report.validation.enumerated() {
                 lines += ["\(i + 1). \(check.file)", check.issues.isEmpty ? "STRUCTURE: checks passed; this is not full fidelity." : "IMPORT NOT CORRECT"]
                 lines += check.issues.map { "ERROR: " + $0 } + check.needsReview.map { "TO REVIEW: " + $0 } + [""]

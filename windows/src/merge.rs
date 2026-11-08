@@ -61,6 +61,33 @@ impl MergeReport {
 /// automatic: a size or proportion shared by every source is kept (at the
 /// largest size); mixed proportions use 16:9, at the largest 16:9 source or
 /// 1920 × 1080 px when there is none. Every source is then adapted to it.
+/// Parts of an imported presentation that nothing in the result uses: its document
+/// properties (authors, company, thumbnail) and its VBA project, which is never
+/// merged. They are removed instead of being carried along unused.
+const UNUSED_IMPORTED_PARTS: [&str; 4] = ["docProps", "ppt/vbaProject.bin", "ppt/vbaData.xml", "ppt/_rels/vbaProject.bin.rels"];
+
+/// External targets PowerPoint loads by itself (linked pictures, media, OLE
+/// links); hyperlinks only open when clicked and are left out.
+fn automatic_external_targets(root: &Path) -> Vec<String> {
+    let mut found = std::collections::BTreeSet::new();
+    for part in package_files(root).into_iter().filter(|f| f.ends_with(".rels")) {
+        let Ok(doc) = read_xml(root, &part) else { continue };
+        for e in doc.root.named("Relationship") {
+            if e.attr("TargetMode") == "External" && !e.attr("Type").ends_with("/hyperlink") {
+                found.insert(e.attr("Target").to_string());
+            }
+        }
+    }
+    found.into_iter().collect()
+}
+fn external_link_warning(file: &str, targets: &[String]) -> Option<String> {
+    if targets.is_empty() {
+        return None;
+    }
+    let sample: Vec<String> = targets.iter().take(3).map(|t| if t.chars().count() > 80 { format!("{}…", t.chars().take(80).collect::<String>()) } else { t.clone() }).collect();
+    Some(format!("{file}: {} linked file(s) or address(es) outside the presentation ({}). PowerPoint may load them when the result is opened; check them if you do not trust the original.", targets.len(), sample.join(", ")))
+}
+
 pub fn plan_slide_size(sizes: &[(i64, i64)], fixed: Option<(i64, i64)>) -> Result<(i64, i64)> {
     let area = |s: &&(i64, i64)| s.0 as i128 * s.1 as i128;
     let target = if let Some(target) = fixed {
@@ -126,7 +153,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             return fail("Invalid input.");
         }
     }
-    let temp = TempDir::new("PPT Show Tools")?;
+    let temp = TempDir::new("PPTShowTools")?;
     let mut roots = vec![];
     for (i, input) in inputs.iter().enumerate() {
         let dir = temp.path().join(format!("input{i}"));
@@ -175,6 +202,11 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
     let mut ct = read_xml(&base, "[Content_Types].xml")?;
     let mut warnings = vec!["Direct Open XML engine (PowerPoint is not opened).".to_string(), "Check playback, editing, notes, fonts, external links and OLE objects in PowerPoint.".to_string()];
     warnings.extend(scaling_warnings);
+    for (i, dir) in roots.iter().enumerate() {
+        if let Some(w) = external_link_warning(&file_name(&inputs[i]), &automatic_external_targets(dir)) {
+            warnings.push(w);
+        }
+    }
     // ST_SlideId allows 256…2147483647; reject anything that would overflow.
     let highest_slide = docs[0].root.child("sldIdLst").and_then(|l| l.named("sldId").filter_map(|e| e.attr("id").parse::<u64>().ok()).max()).unwrap_or(255);
     if highest_slide >= 2147483647 {
@@ -236,6 +268,15 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
         let source = &roots[i];
         let source_doc = &other_docs[i - 1];
         let prefix = format!("pptMerger/source{i}/");
+        let had_vba = source.join("ppt").join("vbaProject.bin").exists();
+        for part in UNUSED_IMPORTED_PARTS {
+            let path = crate::xml::part_path(source, part);
+            if path.is_dir() {
+                std::fs::remove_dir_all(&path).or_else(|e| fail(e.to_string()))?;
+            } else if path.exists() {
+                std::fs::remove_file(&path).or_else(|e| fail(e.to_string()))?;
+            }
+        }
         if notes_target.is_none() {
             let sr = read_xml(source, "ppt/_rels/presentation.xml.rels")?;
             let found = sr.root.named("Relationship").find(|e| e.attr("Type").ends_with("/notesMaster")).cloned();
@@ -362,8 +403,8 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             }
             warnings.push(format!("{}: embedded fonts registered in the result. Check substitutions, usage rights and different variants with the same name.", file_name(&inputs[i])));
         }
-        if source.join("ppt").join("vbaProject.bin").exists() {
-            warnings.push(format!("{}: VBA kept as an inactive resource; not merged into the output VBA project.", file_name(&inputs[i])));
+        if had_vba {
+            warnings.push(format!("{}: its VBA project (macros) was removed; only the first file's macros are kept.", file_name(&inputs[i])));
         }
     }
     let has_macros = base.join("ppt").join("vbaProject.bin").exists();
@@ -416,7 +457,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
     }
     let written = (|| -> Result<()> {
         crate::reports::write(output, ".report.json", &crate::to_json(&report)?)?;
-        let mut lines = vec!["PPTSHOWTOOLS — CHECKS PER FILE".to_string(), if passed { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new(), format!("Output size: {}", describe_size(target)), String::new()];
+        let mut lines = vec!["PPT SHOW TOOLS — CHECKS PER FILE".to_string(), if passed { "Structural checks passed. Visual and playback review pending." } else { "IMPORT NOT CORRECT: differences found." }.into(), String::new(), format!("Output size: {}", describe_size(target)), String::new()];
         for (i, check) in report.validation.iter().enumerate() {
             lines.push(format!("{}. {}", i + 1, check.file));
             lines.push(if check.issues.is_empty() { "STRUCTURE: checks passed; this is not full fidelity." } else { "IMPORT NOT CORRECT" }.into());
