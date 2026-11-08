@@ -180,7 +180,7 @@ struct MainView: View {
                 Button("Choose file…", action: choose)
                 Text(source?.lastPathComponent ?? "No file selected").lineLimit(2).textSelection(.enabled)
             }
-            Text("A new file is created; the original is not changed. The checks run automatically and are saved in a report.").font(.callout).foregroundStyle(.secondary)
+            Text("A new file is created; the original is not changed. The checks run automatically.").font(.callout).foregroundStyle(.secondary)
             Button(actionTitle, action: startTool).disabled(source == nil).keyboardShortcut(.defaultAction)
         }
     }
@@ -325,7 +325,11 @@ struct SettingsSheet: View {
             }
             Text("Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation is adapted to the chosen size: nothing is stretched, text boxes and full-width elements follow the new shape, and pictures spanning the slide are cropped. Pixels are measured as in PowerPoint, at 96 per inch.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack { Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction) }
+            HStack {
+                Text("PPT Show Tools \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools")
+                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
+                Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction)
+            }
         }.padding(24).frame(width: 480)
     }
 }

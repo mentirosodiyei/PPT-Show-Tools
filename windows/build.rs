@@ -57,7 +57,8 @@ fn version_info(version: &str) -> Vec<u8> {
         fixed.extend(x.to_le_bytes());
     }
     let strings: Vec<Vec<u8>> = [
-        ("CompanyName", "PPT Show Tools"),
+        ("CompanyName", "David Redondo García"),
+        ("LegalCopyright", "© 2026 David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools"),
         ("FileDescription", "PPT Show Tools"),
         ("FileVersion", version),
         ("InternalName", "PPTShowTools"),

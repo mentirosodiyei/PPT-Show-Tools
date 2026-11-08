@@ -39,6 +39,7 @@ build() {
 <key>LSMinimumSystemVersion</key><string>14.0</string>
 <key>LSArchitecturePriority</key><array><string>$arch</string></array>
 <key>NSHighResolutionCapable</key><true/>
+<key>NSHumanReadableCopyright</key><string>© 2026 David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools</string>
 <key>NSAppleEventsUsageDescription</key><string>PPT Show Tools asks Microsoft PowerPoint to open, save and close the merged presentation.</string>
 </dict></plist>
 PLIST

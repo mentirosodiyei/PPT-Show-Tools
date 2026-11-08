@@ -556,7 +556,7 @@ impl App {
             }
             ui.label(RichText::new(self.source.as_ref().map(|s| file_name(s)).unwrap_or_else(|| "No file selected".into())).font(regular(BODY)).color(p.text));
         });
-        label(ui, "A new file is created; the original is not changed. The checks run automatically and are saved in a report.", regular(CALLOUT), p.secondary);
+        label(ui, "A new file is created; the original is not changed. The checks run automatically.", regular(CALLOUT), p.secondary);
         let can = self.source.is_some();
         let enter = can && ui.is_enabled() && !modal && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if mac_button(ui, p, self.function.action(), ButtonKind::Default, can).clicked() || enter {
@@ -733,6 +733,9 @@ impl App {
                 if mac_button(ui, p, "Done", ButtonKind::Default, true).clicked() || enter {
                     done = true;
                 }
+                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                    ui.label(RichText::new(format!("PPT Show Tools {} · David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools", env!("CARGO_PKG_VERSION"))).font(regular(10.0)).color(p.secondary));
+                });
             });
         });
         if settings != self.settings {

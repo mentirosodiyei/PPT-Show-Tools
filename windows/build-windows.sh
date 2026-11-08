@@ -15,7 +15,7 @@ EXE="$CARGO_TARGET_DIR/x86_64-pc-windows-msvc/release/PPTShowTools.exe"
 SETUP="$OUT/PPTShowTools-Setup-$VERSION.exe"
 PORTABLE="$OUT/PPTShowTools-$VERSION-Windows-portable.zip"
 rm -f -- "$SETUP" "$PORTABLE"
-makensis -V2 -DVERSION="$VERSION" -DEXE="$EXE" -DOUTFILE="$SETUP" installer/installer.nsi
+makensis -V2 -INPUTCHARSET UTF8 -DVERSION="$VERSION" -DEXE="$EXE" -DOUTFILE="$SETUP" installer/installer.nsi
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/pptshowtools-win.XXXXXX")"
 trap 'rm -rf -- "$STAGE"' EXIT
 mkdir -p "$STAGE/PPT Show Tools"
