@@ -94,6 +94,36 @@ impl<'a> PartPad<'a> {
         }
         true
     }
+    /// Target part of a relationship of this part (internal ones only).
+    pub fn target(&mut self, id: &str) -> Option<String> {
+        if self.rels.is_none() {
+            self.rels = read_xml(self.package, &self.rels_part()).ok();
+        }
+        let rel = self.rels.as_ref()?.root.named("Relationship").find(|r| r.attr("Id") == id && r.attr("TargetMode") != "External")?;
+        Some(resolve_part(&self.part, rel.attr("Target")))
+    }
+    /// Adds a relationship and returns its new id.
+    pub fn add_relationship(&mut self, state: &mut Pad, kind: &str, target: &str) -> Option<String> {
+        if self.rels.is_none() {
+            self.rels = read_xml(self.package, &self.rels_part()).ok();
+        }
+        let rels = self.rels.as_mut()?;
+        let id = loop {
+            state.next += 1;
+            let id = format!("rIdPad{}", state.next);
+            if !rels.root.named("Relationship").any(|r| r.attr("Id") == id) {
+                break id;
+            }
+        };
+        let prefix = rels.root.qname.split_once(':').map(|(p, _)| format!("{p}:")).unwrap_or_default();
+        let mut e = Element::new(&format!("{prefix}Relationship"), PKG_NS);
+        e.set_attr("Id", &id);
+        e.set_attr("Type", kind);
+        e.set_attr("Target", target);
+        rels.root.add(e);
+        self.dirty = true;
+        Some(id)
+    }
     pub fn save(&self) -> crate::Result<()> {
         match (&self.rels, self.dirty) {
             (Some(doc), true) => write_xml(doc, self.package, &self.rels_part()),
@@ -140,7 +170,7 @@ pub fn register(package: &Path, state: &Pad) -> crate::Result<()> {
         }
         let mut d = Element::new(&format!("{prefix}Default"), crate::xml::CT_NS);
         d.set_attr("Extension", ext);
-        d.set_attr("ContentType", if ext == "png" { "image/png" } else { "image/jpeg" });
+        d.set_attr("ContentType", match ext.as_str() { "png" => "image/png", "mp4" => "video/mp4", _ => "image/jpeg" });
         ct.root.add(d);
     }
     write_xml(&ct, package, "[Content_Types].xml")

@@ -82,6 +82,9 @@ pub struct PartFingerprint {
 
 impl PartFingerprint {
     pub fn new(element: &Element) -> PartFingerprint {
+        // Blurred video backgrounds added by a resize are not part of the original.
+        let clean = crate::video::without_backdrops(element);
+        let element = &clean;
         let t = element.child("timing");
         let mut texts = vec![];
         let mut shapes = vec![];

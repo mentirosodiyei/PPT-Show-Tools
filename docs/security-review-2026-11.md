@@ -40,6 +40,16 @@ The files a user opens (PPTX, PPTM, PDF) may come from anyone. Opening one must 
 - **Settings:** a small JSON file (Windows) or the app's preferences (macOS), read with strict parsers.
 - **Remaining dependency advisories:** "unmaintained" notices only. `paste` is used only while compiling. `ttf-parser` reads only fonts installed on Windows, never fonts from presentations. `zvariant`/`zbus` and the old `quick-xml` 0.30 appear only in Linux builds, which are not made.
 
+## Added after the review: blurred video backgrounds
+
+- **macOS:** the blurred copy of a video is made with AVFoundation and Core Image, which are part of the system.
+- **Windows:** FFmpeg is used if the user installed it.
+  - It is looked for only in `PPTSHOWTOOLS_FFMPEG`, in PATH folders (never the app's own folder or the current folder) and in the usual install folders (WinGet, Chocolatey, Scoop, Program Files).
+  - It is looked for next to the app only when the app is installed.
+  - It is started with an argument list, never through a shell, and stopped after 30 minutes.
+  - FFmpeg reads the untrusted video, so its own security matters: keep it up to date.
+- **Original video:** never modified; the copy is a new file inside the presentation.
+
 ## Not covered by code
 
 - **Signing:**

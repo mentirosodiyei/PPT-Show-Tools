@@ -25,8 +25,11 @@ struct SlideScaler {
     ///   centre when they sit in the middle third.
     /// When the proportion does not change this is plain proportional scaling.
     /// Animation coordinates are fractions of the slide, so they stay valid.
-    static func normalize(package: URL, presentation: XMLDocument, from size: (Int64, Int64), to target: (Int64, Int64)) throws {
-        guard size != target else { return }
+    /// Returns notes for the report (videos that got a still instead of a moving background).
+    @discardableResult
+    static func normalize(package: URL, presentation: XMLDocument, from size: (Int64, Int64), to target: (Int64, Int64)) throws -> [String] {
+        guard size != target else { return [] }
+        var notes: [String] = []
         let page = Adaptation(from: size, to: target)
         let fm = FileManager.default
         let pad = PicturePadding.Pad()
@@ -43,16 +46,20 @@ struct SlideScaler {
                 let part = PicturePadding.PartPad(package: package, part: partName)
                 let isMaster = folder == "slideMasters" || folder == "theme"
                 // Frames are read before the uniform pass rescales them.
-                var frames: [ShapeFrame] = []
+                var frames: [ShapeFrame] = [], videos: [String] = []
                 if ["slides", "slideLayouts", "slideMasters"].contains(folder),
                    let tree = try document.nodes(forXPath: "//*[local-name() = 'spTree']").first as? XMLElement {
                     collectFrames(tree, into: &frames)
+                    if !sameAspect(size, target) { videos = VideoBackdrop.spanningVideos(tree, width: page.width, height: page.height) }
                 }
                 if !page.isUnit { try scale(document, factor: page.s, isMaster: isMaster) }
                 for frame in frames { page.place(frame) { part.pad(pad, $0, $1, $2) } }
                 if let root = document.rootElement(), let bg = try root.nodes(forXPath: ".//*[local-name() = 'bgPr']/*[local-name() = 'blipFill']").first as? XMLElement {
                     // A picture background always fills the slide: show it whole in the new proportion.
                     if !part.pad(pad, bg, page.sx, page.sy) { PicturePadding.insetFill(bg, page.sx, page.sy) }
+                }
+                if !videos.isEmpty {
+                    notes += VideoBackdrop.addBackdrops(package: package, document: document, ids: videos, slide: (page.newWidth, page.newHeight), part: part, pad: pad)
                 }
                 try part.save()
                 try serializedXML(document).write(to: file, options: .atomic)
@@ -68,6 +75,7 @@ struct SlideScaler {
         // Existing type values such as screen4x3 would contradict the new size.
         slideSize.attribute(forName: "type")?.detach()
         try write(presentation, package, "ppt/presentation.xml")
+        return Array(Set(notes)).sorted()
     }
 
     /// A top-level object and its frame on the original page.
@@ -120,6 +128,8 @@ struct SlideScaler {
             switch f.kind {
             case "cxnSp": (stretchX, stretchY) = (true, true)
             case "sp" where text: (stretchX, stretchY) = (true, true)
+            // Videos are never reshaped: they keep their proportion (see VideoBackdrop).
+            case "pic" where VideoBackdrop.isVideo(f.shape): (stretchX, stretchY) = (false, false)
             case "sp", "pic": (stretchX, stretchY) = (spansX, spansY)
             default: (stretchX, stretchY) = (false, false)  // groups, charts, tables, SmartArt: rigid
             }

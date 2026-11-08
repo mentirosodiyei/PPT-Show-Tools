@@ -62,7 +62,9 @@ struct PartFingerprint {
     let shapeIDs: Set<String>
     let timingTargetIDs: Set<String>
 
-    init(_ element: XMLElement) throws {
+    init(_ source: XMLElement) throws {
+        // Blurred video backgrounds added by a resize are not part of the original.
+        let element = VideoBackdrop.withoutBackdrops(source)
         let tNode = list(element, "timing")
         timing = semantic(tNode)
         timingNode = tNode?.copy() as? XMLElement

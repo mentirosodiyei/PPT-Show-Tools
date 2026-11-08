@@ -14,7 +14,7 @@ trap 'rm -rf -- "$STAGE"' EXIT
 # SDK 27 lacks the SwiftUI macros this toolchain needs; prefer 26.5 when installed.
 SDK=/Library/Developer/CommandLineTools/SDKs/MacOSX26.5.sdk
 [[ -d "$SDK" ]] || SDK="$(xcrun --show-sdk-path)"
-SOURCES=(Sources/Engine.swift Sources/SlideScaler.swift Sources/PicturePadding.swift Sources/Verifier.swift Sources/OfficePipeline.swift Sources/PowerPointSave.swift Sources/ConversionTools.swift Sources/ReportStore.swift Sources/MainView.swift Sources/App.swift)
+SOURCES=(Sources/Engine.swift Sources/SlideScaler.swift Sources/PicturePadding.swift Sources/VideoBackdrop.swift Sources/Verifier.swift Sources/OfficePipeline.swift Sources/PowerPointSave.swift Sources/ConversionTools.swift Sources/ReportStore.swift Sources/MainView.swift Sources/App.swift)
 mkdir -p dist
 
 # build ARCH FINAL_APP DMG_NAME

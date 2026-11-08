@@ -211,7 +211,7 @@ struct PresentationTools {
             guard !SlideScaler.isWidescreen((w,h)) else {try fail("The presentation is already 16:9. Choose a slide size in Settings to resize it to another size.")}
         }
         try requireValidSlideSize(target)
-        try SlideScaler.normalize(package:root,presentation:pres,from:(w,h),to:target)
+        let videoNotes=try SlideScaler.normalize(package:root,presentation:pres,from:(w,h),to:target)
         let archive=root.deletingLastPathComponent().appendingPathComponent(UUID().uuidString+".zip");defer{try? fm.removeItem(at:archive)}
         try run("/usr/bin/ditto",["-c","-k","--norsrc","--noextattr",root.path,archive.path])
         let check=try temp();defer{try? fm.removeItem(at:check)}
@@ -223,7 +223,7 @@ struct PresentationTools {
         let outPres=try xml(check,"ppt/presentation.xml")
         guard let outSz=list(outPres.rootElement()!,"sldSz"),attr(outSz,"cx")==String(target.0),attr(outSz,"cy")==String(target.1) else{try fail("The expected slide size was not kept.")}
         let canvas=fit ? "Canvas \(describeSize(target)); content centred without enlarging, stretching or cropping" : "Canvas \(describeSize(target)); content scaled proportionally and centred, without stretching or cropping"
-        let r=ToolReport(operation:"Resize slides: \(describeSize((w,h))) → \(describeSize(target))",source:input.path,output:output.path,pages:before.slides.indices.map{ToolPage(sourcePage:$0+1,fontSize:nil,empty:false,warnings:[])},checks:[canvas,"Order, text, notes, animations, transitions and resources verified after saving"],limitations:["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours and other objects keep their size and place.","Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."])
+        let r=ToolReport(operation:"Resize slides: \(describeSize((w,h))) → \(describeSize(target))",source:input.path,output:output.path,pages:before.slides.indices.map{ToolPage(sourcePage:$0+1,fontSize:nil,empty:false,warnings:[])},checks:[canvas,"Order, text, notes, animations, transitions and resources verified after saving"],limitations:["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours, videos keep their proportion over a blurred copy of themselves and other objects keep their size and place.","Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]+videoNotes)
         try publish(archive,r);return r
     }
 }

@@ -65,6 +65,25 @@ enum PicturePadding {
             if let a = blip.attribute(forLocalName: "embed", uri: rNS) { a.stringValue = id }
             return true
         }
+        private func loadRels() -> XMLElement? {
+            if rels == nil { rels = try? xml(package, relsPart) }
+            return rels?.rootElement()
+        }
+        /// Target part of a relationship of this part (internal ones only).
+        func target(_ id: String) -> String? {
+            guard let root = loadRels(), let rel = children(root, "Relationship").first(where: { attr($0, "Id") == id && attr($0, "TargetMode") != "External" }) else { return nil }
+            return resolvePart(owner: part, target: attr(rel, "Target"))
+        }
+        /// Adds a relationship and returns its new id.
+        func addRelationship(_ state: Pad, _ kind: String, _ target: String) -> String? {
+            guard let root = loadRels() else { return nil }
+            var id: String
+            repeat { state.next += 1; id = "rIdPad\(state.next)" } while children(root, "Relationship").contains { attr($0, "Id") == id }
+            let e = XMLElement(name: "Relationship", uri: pkgNS)
+            set(e, "Id", id); set(e, "Type", kind); set(e, "Target", target)
+            root.addChild(e); dirty = true
+            return id
+        }
         func save() throws {
             if dirty, let rels { try write(rels, package, relsPart) }
         }
@@ -96,7 +115,7 @@ enum PicturePadding {
         guard let root = ct.rootElement() else { return }
         for ext in state.extensions.sorted() where !children(root, "Default").contains(where: { attr($0, "Extension").lowercased() == ext }) {
             let d = XMLElement(name: "Default", uri: root.uri)
-            set(d, "Extension", ext); set(d, "ContentType", ext == "png" ? "image/png" : "image/jpeg")
+            set(d, "Extension", ext); set(d, "ContentType", ext == "png" ? "image/png" : ext == "mp4" ? "video/mp4" : "image/jpeg")
             root.addChild(d)
         }
         try write(ct, package, "[Content_Types].xml")

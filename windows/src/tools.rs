@@ -276,7 +276,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
         }
     };
     require_valid_slide_size(target)?;
-    scaler::normalize(root.path(), &mut pres, (w, h), target)?;
+    let video_notes = scaler::normalize(root.path(), &mut pres, (w, h), target)?;
     let work = TempDir::new("PPTShowTools-Tools")?;
     let archive = work.path().join("result.zip");
     zip_dir(root.path(), &archive)?;
@@ -302,7 +302,7 @@ pub fn resize(input: &Path, output: &Path, fixed: Option<(i64, i64)>) -> Result<
         output: output.display().to_string(),
         pages: (0..before.slides.len()).map(|i| ToolPage { source_page: i + 1, font_size: None, empty: false, warnings: vec![] }).collect(),
         checks: vec![canvas, "Order, text, notes, animations, transitions and resources verified after saving".into()],
-        limitations: strings(&["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours and other objects keep their size and place.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]),
+        limitations: strings(&["When the proportion changes, the layout is adapted: text boxes and full-width elements follow the new shape, pictures filling the slide are shown whole, with margins in their own colours, videos keep their proportion over a blurred copy of themselves and other objects keep their size and place.", "Playback and the appearance of OLE, SmartArt, fonts and advanced effects cannot be certified automatically. Check the result in PowerPoint."]).into_iter().chain(video_notes).collect(),
     };
     publish(&archive, &report)?;
     Ok(report)

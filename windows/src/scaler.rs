@@ -37,10 +37,12 @@ fn xml_files(dir: &Path, out: &mut Vec<std::path::PathBuf>) {
 ///   centre when they sit in the middle third.
 /// When the proportion does not change this is plain proportional scaling.
 /// Animation coordinates are fractions of the slide, so they stay valid.
-pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), to: (i64, i64)) -> Result<()> {
+/// Returns notes for the report (videos that got a still instead of a moving background).
+pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), to: (i64, i64)) -> Result<Vec<String>> {
     if from == to {
-        return Ok(());
+        return Ok(vec![]);
     }
+    let mut notes = vec![];
     let page = Adaptation::new(from, to);
     let mut pad = crate::padding::Pad::default();
     // Notes and handouts use their own page coordinates; media bytes and
@@ -57,9 +59,13 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
             let layout_part = ["slides", "slideLayouts", "slideMasters"].contains(&folder);
             // Frames are read before the uniform pass rescales them.
             let mut frames = vec![];
+            let mut videos = vec![];
             if layout_part {
                 if let Some(tree) = doc.root.first_descendant_mut("spTree") {
                     collect_frames(tree, &mut frames);
+                    if !same_aspect(from, to) {
+                        videos = crate::video::spanning_videos(tree, page.width, page.height);
+                    }
                 }
             }
             if !page.is_unit() {
@@ -77,6 +83,9 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
                     }
                 }
             }
+            if !videos.is_empty() {
+                notes.extend(crate::video::add_backdrops(package, &mut doc, &videos, (page.new_width, page.new_height), &mut part, &mut pad));
+            }
             part.save()?;
             write_xml(&doc, package, &rel)?;
         }
@@ -93,7 +102,10 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
         // A type such as screen4x3 would contradict the new size.
         size.remove_attr("type");
     }
-    write_xml(presentation, package, "ppt/presentation.xml")
+    write_xml(presentation, package, "ppt/presentation.xml")?;
+    notes.sort();
+    notes.dedup();
+    Ok(notes)
 }
 
 /// A top-level object's frame on the original page.
@@ -192,6 +204,8 @@ impl Adaptation {
         let (mut stretch_x, mut stretch_y) = match kind.as_str() {
             "cxnSp" => (true, true),
             "sp" if text => (true, true),
+            // Videos are never reshaped: they keep their proportion (see `video`).
+            "pic" if crate::video::is_video(shape) => (false, false),
             "sp" | "pic" => (spans_x, spans_y),
             _ => (false, false), // groups, charts, tables, SmartArt: rigid
         };

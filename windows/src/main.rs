@@ -14,6 +14,7 @@ mod settings;
 mod textfit;
 mod tools;
 mod verifier;
+mod video;
 mod xml;
 
 use std::path::PathBuf;

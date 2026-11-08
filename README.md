@@ -30,6 +30,7 @@ When a merge combines presentations of different sizes, each one is adapted to t
 - Text boxes and placeholders follow the new proportion, so titles and body text use the new width or height.
 - Shapes that span the slide (bars) keep spanning it. Pictures that fill the slide, and picture backgrounds, are never cropped or stretched: the whole picture is shown, and the new margins take the colours of its edges, fading into a soft wash, so the join does not show. Formats other than PNG and JPEG, and pictures already cropped, keep their own proportion instead.
 - Everything else keeps its size and stays anchored where it was: a logo in a corner stays in that corner, a centred photo stays centred.
+- Videos are never modified. A video that filled the slide keeps its own proportion, centred; behind it, a copy covers the whole slide without distortion (cropped only outside the slide), heavily blurred and silent, and plays and pauses with it. macOS makes the copy itself (AVFoundation). Windows uses [FFmpeg](https://ffmpeg.org) if it is installed (for example `winget install Gyan.FFmpeg`); without it the background is a blurred still of the video's first frame, and the report says so.
 - Animations, motion paths and transitions are unchanged (PowerPoint measures them as fractions of the slide).
 
 Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\PPT Show Tools\settings.json` (the portable version keeps it only while it is open).
@@ -87,7 +88,7 @@ PPTShowTools --extract-notes output.pptx input.pptx
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize
 ```
 
 `PPTSHOWTOOLS_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.
