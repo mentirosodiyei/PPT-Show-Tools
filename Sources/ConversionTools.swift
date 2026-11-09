@@ -233,6 +233,8 @@ final class SimpleDeck {
     let root:URL,width:Double,height:Double
     var count=0
     var imagePages=Set<Int>()
+    /// Picture formats in ppt/media, for [Content_Types].xml.
+    var extensions:Set<String>=["png"]
     init(root:URL,width:Double,height:Double) throws {
         self.root=root;self.width=width;self.height=height
         for folder in ["_rels","ppt/_rels","ppt/slides/_rels","ppt/media","ppt/slideMasters/_rels","ppt/slideLayouts/_rels","ppt/theme"] {try FileManager.default.createDirectory(at:root.appendingPathComponent(folder),withIntermediateDirectories:true)}
@@ -243,10 +245,11 @@ final class SimpleDeck {
     var group:String {"<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>"}
     var map:String {"<p:clrMap accent1=\"accent1\" accent2=\"accent2\" accent3=\"accent3\" accent4=\"accent4\" accent5=\"accent5\" accent6=\"accent6\" bg1=\"lt1\" bg2=\"lt2\" folHlink=\"folHlink\" hlink=\"hlink\" tx1=\"dk1\" tx2=\"dk2\"/>"}
     func rel(_ items:[(String,String,String)]) -> String {"<Relationships xmlns=\"\(pkgNS)\">"+items.map{"<Relationship Id=\"\($0.0)\" Type=\"\(rNS)/\($0.1)\" Target=\"\(esc($0.2))\"/>"}.joined()+"</Relationships>"}
-    func add(body:String,black:Bool) throws {
+    /// `relations` are extra (id, type, target) relationships; `transition` is a p:transition element or "".
+    func add(body:String,black:Bool,relations extra:[(String,String,String)]=[],transition:String="") throws {
         count+=1
-        try put("ppt/slides/slide\(count).xml","<p:sld xmlns:p=\"\(pNS)\" xmlns:a=\"\(SlideScaler.drawingNS)\" xmlns:r=\"\(rNS)\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"\(black ? "000000":"FFFFFF")\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>\(group)\(body)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>")
-        var relations=[("layout","slideLayout","../slideLayouts/slideLayout1.xml")]
+        try put("ppt/slides/slide\(count).xml","<p:sld xmlns:p=\"\(pNS)\" xmlns:a=\"\(SlideScaler.drawingNS)\" xmlns:r=\"\(rNS)\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"\(black ? "000000":"FFFFFF")\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>\(group)\(body)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>\(transition)</p:sld>")
+        var relations=[("layout","slideLayout","../slideLayouts/slideLayout1.xml")]+extra
         if imagePages.contains(count){relations.append(("image","image","../media/page\(count).png"))}
         try put("ppt/slides/_rels/slide\(count).xml.rels",rel(relations))
     }
@@ -279,7 +282,7 @@ final class SimpleDeck {
         try put("ppt/theme/theme1.xml","<a:theme xmlns:a=\"\(a)\" name=\"PPT Tools\"><a:themeElements><a:clrScheme name=\"Default\">\(colors)</a:clrScheme><a:fontScheme name=\"Arial\"><a:majorFont><a:latin typeface=\"Arial\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:majorFont><a:minorFont><a:latin typeface=\"Arial\"/><a:ea typeface=\"\"/><a:cs typeface=\"\"/></a:minorFont></a:fontScheme><a:fmtScheme name=\"Default\"><a:fillStyleLst>\(String(repeating:fill,count:3))</a:fillStyleLst><a:lnStyleLst>\(String(repeating:line,count:3))</a:lnStyleLst><a:effectStyleLst>\(String(repeating:"<a:effectStyle><a:effectLst/></a:effectStyle>",count:3))</a:effectStyleLst><a:bgFillStyleLst>\(String(repeating:fill,count:3))</a:bgFillStyleLst></a:fmtScheme></a:themeElements></a:theme>")
         let overrides=[("ppt/presentation.xml","presentation.main"),("ppt/slideMasters/slideMaster1.xml","slideMaster"),("ppt/slideLayouts/slideLayout1.xml","slideLayout")]+(1...count).map{("ppt/slides/slide\($0).xml","slide")}
         let types=overrides.map{"<Override PartName=\"/\($0.0)\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.\($0.1)+xml\"/>"}.joined()
-        try put("[Content_Types].xml","<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"png\" ContentType=\"image/png\"/><Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>\(types)</Types>")
+        try put("[Content_Types].xml","<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>\(extensions.sorted().map{"<Default Extension=\"\($0)\" ContentType=\"image/\($0 == "jpg" ? "jpeg" : $0)\"/>"}.joined())<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>\(types)</Types>")
         try run("/usr/bin/ditto",["-c","-k","--norsrc","--noextattr",root.path,output.path])
     }
 }

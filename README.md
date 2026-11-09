@@ -16,6 +16,7 @@ Everything is on one screen: choose a **Function** and follow the controls below
 | **PDF to PowerPoint** | One slide per PDF page, as an image. Slides take the size set in Settings (with *Automatic*, the first page's proportion); text is not editable. |
 | **Resize slides** | Changes the slides to the size set in Settings (with *Automatic*, to 16:9) without changing the design; only the background grows (see *How slides are resized*). |
 | **Extract notes** | One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”. |
+| **Images to PowerPoint** | Pictures or folders (dropped or chosen) become a presentation: one per slide, four per slide, or a random mix of one to four. Pictures are never cropped or stretched; JPEG, PNG and GIF go in byte for byte, HEIC/HEIF, WebP, AVIF, TIFF and BMP are converted (JPEG, or PNG with transparency) and sideways photos are turned upright. Optional transition (fade, push, wipe, split, cover, dissolve, zoom, random) and automatic advance. |
 
 ## Settings: slide size
 
@@ -81,6 +82,7 @@ PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx
 PPTShowTools --resize [--size WxH] output.pptx input.pptx
 PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf
 PPTShowTools --extract-notes output.pptx input.pptx
+PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition NAME] [--advance SECONDS] output.pptx image-or-folder […]
 ```
 
 `--size` takes pixels (`4800x1344`) or `auto`. `--fit-non169` is still accepted by older scripts and ignored.
@@ -88,7 +90,7 @@ PPTShowTools --extract-notes output.pptx input.pptx
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize test_images
 ```
 
 `PPTSHOWTOOLS_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.

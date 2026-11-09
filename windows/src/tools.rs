@@ -37,7 +37,7 @@ pub fn require_new(input: &Path, output: &Path) -> Result<()> {
     Ok(())
 }
 
-fn unpack(input: &Path, root: &Path) -> Result<()> {
+pub(crate) fn unpack(input: &Path, root: &Path) -> Result<()> {
     let e = extension(input);
     if e != "pptx" && e != "pptm" {
         return fail("Choose a PPTX or PPTM file.");
@@ -58,7 +58,7 @@ fn emit(report: &ToolReport) -> Result<()> {
 }
 
 /// The result only reaches its final name after every check has passed.
-fn publish(staged: &Path, report: &ToolReport) -> Result<()> {
+pub(crate) fn publish(staged: &Path, report: &ToolReport) -> Result<()> {
     let output = PathBuf::from(&report.output);
     copy_new(staged, &output)?;
     if let Err(e) = emit(report) {
@@ -315,12 +315,14 @@ pub struct SimpleDeck {
     height: f64,
     count: usize,
     image_pages: std::collections::HashSet<usize>,
+    /// Picture formats in ppt/media, for [Content_Types].xml.
+    pub extensions: std::collections::BTreeSet<String>,
 }
 
-fn esc(text: &str) -> String {
+pub(crate) fn esc(text: &str) -> String {
     text.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;").replace('"', "&quot;")
 }
-fn emu(points: f64) -> i64 {
+pub(crate) fn emu(points: f64) -> i64 {
     (points * 12700.0).round() as i64
 }
 const GROUP: &str = "<p:nvGrpSpPr><p:cNvPr id=\"1\" name=\"\"/><p:cNvGrpSpPr/><p:nvPr/></p:nvGrpSpPr><p:grpSpPr><a:xfrm><a:off x=\"0\" y=\"0\"/><a:ext cx=\"0\" cy=\"0\"/><a:chOff x=\"0\" y=\"0\"/><a:chExt cx=\"0\" cy=\"0\"/></a:xfrm></p:grpSpPr>";
@@ -336,16 +338,21 @@ impl SimpleDeck {
         for folder in ["_rels", "ppt/_rels", "ppt/slides/_rels", "ppt/media", "ppt/slideMasters/_rels", "ppt/slideLayouts/_rels", "ppt/theme"] {
             std::fs::create_dir_all(crate::xml::part_path(root, folder)).or_else(|e| fail(e.to_string()))?;
         }
-        Ok(SimpleDeck { root: root.to_path_buf(), width, height, count: 0, image_pages: Default::default() })
+        Ok(SimpleDeck { root: root.to_path_buf(), width, height, count: 0, image_pages: Default::default(), extensions: ["png".to_string()].into() })
     }
     fn put(&self, name: &str, text: &str) -> Result<()> {
         std::fs::write(crate::xml::part_path(&self.root, name), text).or_else(|e| fail(format!("Cannot write {name}: {e}")))
     }
     fn add(&mut self, body: &str, black: bool) -> Result<()> {
+        self.add_with(body, black, &[], "")
+    }
+    /// `extra` are (id, type, target) relationships; `transition` is a p:transition element or "".
+    pub fn add_with(&mut self, body: &str, black: bool, extra: &[(String, &str, String)], transition: &str) -> Result<()> {
         self.count += 1;
         let n = self.count;
-        self.put(&format!("ppt/slides/slide{n}.xml"), &format!("<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\" xmlns:r=\"{R_NS}\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>{GROUP}{body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr></p:sld>", if black { "000000" } else { "FFFFFF" }))?;
+        self.put(&format!("ppt/slides/slide{n}.xml"), &format!("<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\" xmlns:r=\"{R_NS}\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>{GROUP}{body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>{transition}</p:sld>", if black { "000000" } else { "FFFFFF" }))?;
         let mut relations = vec![("layout", "slideLayout", "../slideLayouts/slideLayout1.xml".to_string())];
+        relations.extend(extra.iter().map(|(id, kind, target)| (id.as_str(), *kind, target.clone())));
         if self.image_pages.contains(&n) {
             relations.push(("image", "image", format!("../media/page{n}.png")));
         }
@@ -389,7 +396,7 @@ impl SimpleDeck {
         let mut overrides = vec![("ppt/presentation.xml".to_string(), "presentation.main"), ("ppt/slideMasters/slideMaster1.xml".into(), "slideMaster"), ("ppt/slideLayouts/slideLayout1.xml".into(), "slideLayout")];
         overrides.extend((1..=self.count).map(|i| (format!("ppt/slides/slide{i}.xml"), "slide")));
         let types: String = overrides.iter().map(|(p, k)| format!("<Override PartName=\"/{p}\" ContentType=\"application/vnd.openxmlformats-officedocument.presentationml.{k}+xml\"/>")).collect();
-        self.put("[Content_Types].xml", &format!("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/><Default Extension=\"png\" ContentType=\"image/png\"/><Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>{types}</Types>"))?;
+        self.put("[Content_Types].xml", &format!("<Types xmlns=\"http://schemas.openxmlformats.org/package/2006/content-types\"><Default Extension=\"rels\" ContentType=\"application/vnd.openxmlformats-package.relationships+xml\"/>{}<Override PartName=\"/ppt/theme/theme1.xml\" ContentType=\"application/vnd.openxmlformats-officedocument.theme+xml\"/>{types}</Types>", self.extensions.iter().map(|e| format!("<Default Extension=\"{e}\" ContentType=\"image/{}\"/>", if e == "jpg" { "jpeg" } else { e })).collect::<String>()))?;
         zip_dir(&self.root, output)
     }
 }

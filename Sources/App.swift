@@ -70,11 +70,14 @@ struct PPTShowToolsApp: App {
 
     /// Same commands as the Windows build, used by the test suite.
     static func runCommandLine(_ all: [String]) -> Int32 {
-        var args: [String] = [], size: String?, i = 0
+        var args: [String] = [], size: String?, layout = "one", transition = "none", advance: String?, i = 0
         while i < all.count {
             // --fit-non169 is accepted for compatibility: every size is now adapted.
             if all[i] == "--fit-non169" { i += 1; continue }
             if all[i] == "--size", i + 1 < all.count { size = all[i + 1]; i += 2; continue }
+            if all[i] == "--layout", i + 1 < all.count { layout = all[i + 1]; i += 2; continue }
+            if all[i] == "--transition", i + 1 < all.count { transition = all[i + 1]; i += 2; continue }
+            if all[i] == "--advance", i + 1 < all.count { advance = all[i + 1]; i += 2; continue }
             args.append(all[i]); i += 1
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -98,6 +101,18 @@ struct PPTShowToolsApp: App {
             case "--verify" where args.count >= 5:
                 let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
+            case "--images-to-ppt" where args.count >= 4:
+                guard let chosenLayout = ImageLayout(rawValue: layout) else { try fail("--layout must be one, four or random.") }
+                guard let chosenTransition = SlideTransition(rawValue: transition) else { try fail("--transition must be one of: " + SlideTransition.allCases.map(\.rawValue).joined(separator: ", ") + ".") }
+                var seconds: Double? = nil
+                if let advance { guard let value = Double(advance) else { try fail("--advance takes seconds, for example 5.") }; seconds = value }
+                let output = URL(fileURLWithPath: args[2])
+                do {
+                    try printJSON(try PresentationTools.imagesToPPT(inputs: paths(3), output: output, fixedSize: fixed, layout: chosenLayout, transition: chosenTransition, advance: seconds)); return 0
+                } catch {
+                    let log = PresentationTools.logFailure(output: output, error: error)
+                    fputs(error.localizedDescription + "\nLog: " + log + "\n", stderr); return 1
+                }
             case "--pdf-to-ppt", "--resize", "--to-169", "--extract-notes":
                 guard args.count == 4 else { break }
                 let input = URL(fileURLWithPath: args[3]), output = URL(fileURLWithPath: args[2])
@@ -127,6 +142,7 @@ struct PPTShowToolsApp: App {
                    PPTShowTools --resize [--size WxH] output.pptx input.pptx
                    PPTShowTools --pdf-to-ppt output.pptx input.pdf
                    PPTShowTools --extract-notes output.pptx input.pptx
+                   PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] output.pptx image-or-folder […]
             """)
         } catch {
             fputs(error.localizedDescription + "\n", stderr); return 1

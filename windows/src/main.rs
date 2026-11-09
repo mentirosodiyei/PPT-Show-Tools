@@ -2,6 +2,7 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 mod gui;
+mod images;
 mod merge;
 mod office;
 mod package;
@@ -59,6 +60,7 @@ fn attach_console() {
 fn run_cli(all: &[String]) -> i32 {
     let mut args: Vec<&String> = vec![];
     let mut size: Option<&String> = None;
+    let (mut layout, mut transition, mut advance) = ("one".to_string(), "none".to_string(), None::<String>);
     let mut i = 0;
     while i < all.len() {
         // --fit-non169 is accepted for compatibility: every size is now adapted.
@@ -68,6 +70,15 @@ fn run_cli(all: &[String]) -> i32 {
         }
         if all[i] == "--size" && i + 1 < all.len() {
             size = Some(&all[i + 1]);
+            i += 2;
+            continue;
+        }
+        if ["--layout", "--transition", "--advance"].contains(&all[i].as_str()) && i + 1 < all.len() {
+            match all[i].as_str() {
+                "--layout" => layout = all[i + 1].clone(),
+                "--transition" => transition = all[i + 1].clone(),
+                _ => advance = Some(all[i + 1].clone()),
+            }
             i += 2;
             continue;
         }
@@ -103,6 +114,25 @@ fn run_cli(all: &[String]) -> i32 {
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
+            "--images-to-ppt" if args.len() >= 4 => {
+                let Some(chosen) = images::ImageLayout::parse(&layout) else { return fail("--layout must be one, four or random.") };
+                let seconds = match &advance {
+                    Some(a) => Some(a.parse::<f64>().or_else(|_| fail("--advance takes seconds, for example 5."))?),
+                    None => None,
+                };
+                let output = PathBuf::from(args[2]);
+                match images::images_to_ppt(&paths(3), &output, fixed, chosen, &transition, seconds) {
+                    Ok(r) => {
+                        print_json(&r)?;
+                        Ok(0)
+                    }
+                    Err(e) => {
+                        let log = reports::log_failure(&output, &e.to_string());
+                        eprintln!("{e}\nLog: {log}");
+                        Ok(1)
+                    }
+                }
+            }
             "--pdf-to-ppt" | "--resize" | "--to-169" | "--extract-notes" if args.len() == 4 => {
                 let (input, output) = (PathBuf::from(args[3]), PathBuf::from(args[2]));
                 let report = match command {
@@ -133,7 +163,7 @@ fn run_cli(all: &[String]) -> i32 {
                 println!("{} slides. Report: {}", report.total_slides, report_path(args[2]));
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }
-            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx"),
+            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx\n       PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] output.pptx image-or-folder […]"),
         }
     })();
     match result {

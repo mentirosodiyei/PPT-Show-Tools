@@ -49,10 +49,15 @@ pub struct Settings {
     pub slide_size: SizeChoice,
     pub custom_width: i64,
     pub custom_height: i64,
+    /// Images to PowerPoint: layout ("one", "four", "random"), transition and
+    /// automatic advance in seconds (0 = on click).
+    pub image_layout: String,
+    pub image_transition: String,
+    pub image_advance: i64,
 }
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080 }
+        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0 }
     }
 }
 

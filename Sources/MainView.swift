@@ -3,7 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum DeckFunction: String, CaseIterable, Identifiable {
-    case merge = "Merge", pdf = "PDF to PowerPoint", resize = "Resize slides", notes = "Extract notes"
+    case merge = "Merge", pdf = "PDF to PowerPoint", resize = "Resize slides", notes = "Extract notes", images = "Images to PowerPoint"
     var id: String { rawValue }
 }
 
@@ -11,7 +11,12 @@ struct MainView: View {
     @AppStorage("slideSize") private var sizeChoice = SlideSizeChoice.automatic.rawValue
     @AppStorage("customWidth") private var customWidth = 1920
     @AppStorage("customHeight") private var customHeight = 1080
+    @AppStorage("imageLayout") private var imageLayout = ImageLayout.one.rawValue
+    @AppStorage("imageTransition") private var imageTransition = SlideTransition.fade.rawValue
+    @AppStorage("imageAdvance") private var imageAdvance = 0   // seconds; 0 = on click
     @State private var function = DeckFunction.merge
+    @State private var images: [URL] = []
+    @State private var advanceText = "5"
     @State private var files: [URL] = []
     @State private var selected: URL?
     @State private var source: URL?
@@ -44,6 +49,8 @@ struct MainView: View {
                 : "Adapts the slides to \(sizeSummary): the design does not change: the content is scaled as a whole and centred, and only the background extends into the new margins (photos with their own colours, videos with a blurred copy)."
         case .notes:
             return "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”."
+        case .images:
+            return "One slide per picture, or several per slide. Pictures are never cropped or stretched; JPEG, PNG and GIF go in unchanged. Slide size: \(isAutomatic ? "16:9 (1280 × 720 px)" : sizeSummary)."
         }
     }
 
@@ -58,18 +65,18 @@ struct MainView: View {
                 ForEach(DeckFunction.allCases) { Text($0.rawValue).tag($0) }
             }.pickerStyle(.segmented).fixedSize()
             Text(explanation).font(.callout).foregroundStyle(.secondary)
-            if function == .merge { mergeContent } else { fileContent }
+            if function == .merge { mergeContent } else if function == .images { imageContent } else { fileContent }
             if busy { ProgressView(function == .merge ? "Merging…" : "Converting and checking…") }
             Text(status).font(.callout).textSelection(.enabled)
             resultButtons
-            if let toolReport, function != .merge { reportDetails(toolReport) }
-            if function != .merge { Spacer(minLength: 0) }
+            if let toolReport, function != .merge, function != .images { reportDetails(toolReport) }
+            if function != .merge && function != .images { Spacer(minLength: 0) }
         }
         .padding(24).frame(minWidth: 680, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity, alignment: .topLeading)
         .disabled(busy)
         .onChange(of: function) {
             source = nil; toolReport = nil
-            status = function == .merge ? "Add the presentations in the order you want to merge them." : "Choose the original file."
+            status = function == .merge ? "Add the presentations in the order you want to merge them." : function == .images ? "Add pictures or folders; they go in the order shown." : "Choose the original file."
         }
         .background(WindowFitter())
         .sheet(isPresented: $showChecks) { ChecksSheet(validation: validation) { showChecks = false } }
@@ -159,6 +166,102 @@ struct MainView: View {
         }
     }
 
+    // MARK: Images
+
+    private var imageContent: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            List(selection: $selected) {
+                ForEach(Array(images.enumerated()), id: \.element) { i, file in
+                    Text("\(i + 1). \(file.lastPathComponent)").tag(file)
+                }
+            }.onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
+                Task { @MainActor in
+                    var urls: [URL] = []
+                    for provider in providers {
+                        let data: Data? = await withCheckedContinuation { continuation in
+                            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { d, _ in continuation.resume(returning: d) }
+                        }
+                        if let data, let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }
+                    }
+                    addImages(urls)
+                }
+                return true
+            }
+            HStack(spacing: 16) {
+                Picker("Layout", selection: $imageLayout) {
+                    ForEach(ImageLayout.allCases) { Text($0.title).tag($0.rawValue) }
+                }.pickerStyle(.segmented).fixedSize()
+                Picker("Transition", selection: $imageTransition) {
+                    ForEach(SlideTransition.allCases) { Text($0.title).tag($0.rawValue) }
+                }.pickerStyle(.menu).fixedSize()
+            }
+            HStack(spacing: 8) {
+                Picker("Advance", selection: Binding(get: { imageAdvance > 0 }, set: { imageAdvance = $0 ? max(1, Int(advanceText) ?? 5) : 0 })) {
+                    Text("On click").tag(false)
+                    Text("Every").tag(true)
+                }.pickerStyle(.radioGroup).horizontalRadioGroupLayout().fixedSize()
+                TextField("", text: $advanceText).frame(width: 44).multilineTextAlignment(.trailing)
+                    .onChange(of: advanceText) {
+                        let digits = advanceText.filter(\.isNumber)
+                        if digits != advanceText { advanceText = digits }
+                        if let n = Int(digits), n > 0, n <= 3600 { imageAdvance = n }
+                    }
+                Text("s")
+            }
+            HStack {
+                Button("Add images…") {
+                    let panel = NSOpenPanel(); panel.allowsMultipleSelection = true
+                    panel.allowedContentTypes = PresentationTools.imageExtensions.compactMap { UTType(filenameExtension: $0) }
+                    if panel.runModal() == .OK { addImages(panel.urls) }
+                }
+                Button("Add folder…") {
+                    let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.allowsMultipleSelection = true
+                    if panel.runModal() == .OK { addImages(panel.urls) }
+                }
+                Button("Up") { moveImage(-1) }.disabled(selected == nil)
+                Button("Down") { moveImage(1) }.disabled(selected == nil)
+                Button("Remove") { images.removeAll { $0 == selected }; selected = nil }.disabled(selected == nil)
+                Spacer()
+                Button("Create presentation…", action: createFromImages).disabled(images.isEmpty).keyboardShortcut(.defaultAction)
+            }
+        }
+        .onAppear { if imageAdvance > 0 { advanceText = String(imageAdvance) } }
+    }
+
+    /// Folders are expanded into their pictures right away, so the list shows the real order.
+    private func addImages(_ urls: [URL]) {
+        for url in PresentationTools.imageFiles(in: urls) where !images.contains(url) { images.append(url) }
+        status = images.isEmpty ? "No pictures found there." : "\(images.count) pictures, in the order shown."
+    }
+    private func moveImage(_ delta: Int) {
+        guard let selected, let i = images.firstIndex(of: selected), images.indices.contains(i + delta) else { return }
+        images.swapAt(i, i + delta)
+    }
+
+    private func createFromImages() {
+        let fixed: (Int64, Int64)?
+        do { fixed = try SlideSizeChoice.fixedSize(choice: sizeChoice, width: customWidth, height: customHeight) } catch { status = error.localizedDescription; return }
+        let inputs = images, layout = ImageLayout(rawValue: imageLayout) ?? .one, transition = SlideTransition(rawValue: imageTransition) ?? .none
+        let advance = imageAdvance > 0 ? Double(imageAdvance) : nil
+        let panel = NSSavePanel()
+        let folder = inputs.first?.deletingLastPathComponent()
+        panel.directoryURL = folder
+        panel.nameFieldStringValue = (folder?.lastPathComponent ?? "Pictures") + ".pptx"
+        panel.allowedContentTypes = [UTType(filenameExtension: "pptx")!]
+        guard panel.runModal() == .OK, let output = panel.url else { return }
+        busy = true; toolReport = nil; mergeResult = nil; status = "Creating and checking…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let report = try PresentationTools.imagesToPPT(inputs: inputs, output: output, fixedSize: fixed, layout: layout, transition: transition, advance: advance)
+                let pictures = report.checks.first ?? ""
+                DispatchQueue.main.async { toolReport = report; busy = false; status = pictures + ". Checks passed; review the appearance in PowerPoint." }
+            } catch {
+                let log = PresentationTools.logFailure(output: output, error: error)
+                DispatchQueue.main.async { busy = false; status = "STOPPED: " + error.localizedDescription + "\nLog: " + log }
+            }
+        }
+    }
+
     // MARK: Single-file functions
 
     private var actionTitle: String {
@@ -167,6 +270,7 @@ struct MainView: View {
         case .resize: return "Resize…"
         case .notes: return "Extract notes…"
         case .merge: return "Merge…"
+        case .images: return "Create presentation…"
         }
     }
 
@@ -206,7 +310,7 @@ struct MainView: View {
                 case .pdf: report = try PresentationTools.pdfToPPT(input: source, output: output, fixedSize: fixed)
                 case .resize: report = try PresentationTools.resize(input: source, output: output, fixedSize: fixed)
                 case .notes: report = try PresentationTools.extractNotes(input: source, output: output)
-                case .merge: return
+                case .merge, .images: return
                 }
                 DispatchQueue.main.async { toolReport = report; busy = false; status = "\(report.pages.count) slides created. Checks passed; review the appearance and the warnings in the report." }
             } catch {

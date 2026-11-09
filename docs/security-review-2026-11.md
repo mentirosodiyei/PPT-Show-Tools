@@ -52,6 +52,14 @@ The files a user opens (PPTX, PPTM, PDF) may come from anyone. Opening one must 
   - FFmpeg reads the untrusted video, so its own security matters: keep it up to date.
 - **Original video:** never modified; the copy is a new file inside the presentation.
 
+## Added after the review: Images to PowerPoint
+
+- **Picture decoding:** pictures are untrusted input.
+  - macOS decodes them with ImageIO, part of the system.
+  - Windows uses the `image` library (JPEG, PNG, GIF, WebP, TIFF, BMP), which applies its default memory limits. HEIC/HEIF and AVIF go through the bundled FFmpeg, found and started as for videos.
+- **Folders:** only the folder itself is read, not subfolders; hidden files are skipped; at most 2,000 pictures.
+- **Originals:** JPEG, PNG and GIF are copied byte for byte and checked by SHA-256 after saving; nothing is written next to the originals, and an existing output is never replaced.
+
 ## Not covered by code
 
 - **Signing:**

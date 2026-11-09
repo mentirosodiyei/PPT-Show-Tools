@@ -121,6 +121,23 @@ fn mac_button(ui: &mut egui::Ui, p: &Palette, label: &str, kind: ButtonKind, ena
     response
 }
 
+/// macOS pop-up button: the current choice and up/down chevrons on the right.
+fn popup_button(ui: &mut egui::Ui, p: &Palette, label: &str) -> egui::Response {
+    let enabled = ui.is_enabled();
+    let galley = ui.painter().layout_no_wrap(label.to_string(), regular(BODY), p.text);
+    let (rect, response) = ui.allocate_exact_size(vec2(galley.size().x + 40.0, 24.0), if enabled { Sense::click() } else { Sense::hover() });
+    let down = enabled && response.is_pointer_button_down_on();
+    let fill = if !enabled { p.disabled_fill } else if down { p.button_down } else if response.hovered() { p.button_hover } else { p.button };
+    let text = if enabled { p.text } else { p.disabled_text };
+    ui.painter().rect_filled(rect, CornerRadius::same(6), fill);
+    ui.painter().galley(pos2(rect.left() + 12.0, rect.center().y - galley.size().y / 2.0), galley, text);
+    let (x, y) = (rect.right() - 14.0, rect.center().y);
+    let stroke = Stroke::new(1.5_f32, text);
+    ui.painter().line(vec![pos2(x - 3.5, y - 2.0), pos2(x, y - 5.5), pos2(x + 3.5, y - 2.0)], stroke);
+    ui.painter().line(vec![pos2(x - 3.5, y + 2.0), pos2(x, y + 5.5), pos2(x + 3.5, y + 2.0)], stroke);
+    response
+}
+
 fn label(ui: &mut egui::Ui, text: &str, font: FontId, color: Color32) -> egui::Response {
     ui.add(egui::Label::new(RichText::new(text).font(font).color(color)).wrap().selectable(true))
 }
@@ -196,8 +213,9 @@ enum Function {
     Pdf,
     Resize,
     Notes,
+    Images,
 }
-const FUNCTIONS: [Function; 4] = [Function::Merge, Function::Pdf, Function::Resize, Function::Notes];
+const FUNCTIONS: [Function; 5] = [Function::Merge, Function::Pdf, Function::Resize, Function::Notes, Function::Images];
 impl Function {
     fn title(self) -> &'static str {
         match self {
@@ -205,6 +223,7 @@ impl Function {
             Function::Pdf => "PDF to PowerPoint",
             Function::Resize => "Resize slides",
             Function::Notes => "Extract notes",
+            Function::Images => "Images to PowerPoint",
         }
     }
     fn action(self) -> &'static str {
@@ -213,6 +232,7 @@ impl Function {
             Function::Pdf => "Convert to PowerPoint…",
             Function::Resize => "Resize…",
             Function::Notes => "Extract notes…",
+            Function::Images => "Create presentation…",
         }
     }
 }
@@ -243,6 +263,8 @@ struct App {
     width_text: String,
     height_text: String,
     files: Vec<PathBuf>,
+    images: Vec<PathBuf>,
+    advance_text: String,
     selected: Option<usize>,
     source: Option<PathBuf>,
     busy: bool,
@@ -275,6 +297,8 @@ impl App {
             height_text: settings.custom_height.to_string(),
             settings,
             files: vec![],
+            images: vec![],
+            advance_text: "5".into(),
             selected: None,
             source: None,
             busy: false,
@@ -304,6 +328,7 @@ impl App {
             Function::Resize if automatic => "Widens the slides to 16:9 without changing the design: the content is scaled as a whole and centred, and only the background extends into the new margins. Choose another size in Settings.".into(),
             Function::Resize => format!("Adapts the slides to {size}: the design does not change: the content is scaled as a whole and centred, and only the background extends into the new margins (photos with their own colours, videos with a blurred copy)."),
             Function::Notes => "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”.".into(),
+            Function::Images => format!("One slide per picture, or several per slide. Pictures are never cropped or stretched; JPEG, PNG and GIF go in unchanged. Slide size: {}.", if automatic { "16:9 (1280 × 720 px)".to_string() } else { size }),
         }
     }
 
@@ -314,7 +339,12 @@ impl App {
         self.function = f;
         self.source = None;
         self.tool_report = None;
-        self.status = if f == Function::Merge { MERGE_HINT.into() } else { "Choose the original file.".into() };
+        self.selected = None;
+        self.status = match f {
+            Function::Merge => MERGE_HINT.into(),
+            Function::Images => "Add pictures or folders; they go in the order shown.".into(),
+            _ => "Choose the original file.".into(),
+        };
     }
 
     fn add(&mut self, urls: Vec<PathBuf>) {
@@ -324,6 +354,51 @@ impl App {
                 self.files.push(url);
             }
         }
+    }
+
+    /// Folders are expanded into their pictures right away, so the list shows the real order.
+    fn add_images(&mut self, urls: Vec<PathBuf>) {
+        for url in crate::images::image_files(&urls) {
+            if !self.images.contains(&url) {
+                self.images.push(url);
+            }
+        }
+        self.status = if self.images.is_empty() { "No pictures found there.".into() } else { format!("{} pictures, in the order shown.", self.images.len()) };
+    }
+
+    fn start_images(&mut self, ctx: &egui::Context) {
+        let fixed = match self.settings.fixed_size() {
+            Ok(f) => f,
+            Err(e) => {
+                self.status = e.to_string();
+                return;
+            }
+        };
+        let inputs = self.images.clone();
+        let layout = crate::images::ImageLayout::parse(&self.settings.image_layout).unwrap_or(crate::images::ImageLayout::One);
+        let transition = self.settings.image_transition.clone();
+        let advance = (self.settings.image_advance > 0).then_some(self.settings.image_advance as f64);
+        let folder = inputs.first().and_then(|f| f.parent().map(Path::to_path_buf));
+        let name = folder.as_ref().map(|f| file_name(f)).filter(|n| !n.is_empty()).unwrap_or_else(|| "Pictures".into());
+        let mut dialog = rfd::FileDialog::new().set_file_name(format!("{name}.pptx")).add_filter("PowerPoint", &["pptx"]);
+        if let Some(dir) = &folder {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(output) = dialog.save_file() else { return };
+        self.busy = true;
+        self.tool_report = None;
+        self.merge_result = None;
+        self.status = "Creating and checking…".into();
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = crate::images::images_to_ppt(&inputs, &output, fixed, layout, &transition, advance).map_err(|e| {
+                let log = crate::reports::log_failure(&output, &e.to_string());
+                format!("STOPPED: {e}\nLog: {log}")
+            });
+            let _ = tx.send(Msg::Tool(result));
+            ctx.request_repaint();
+        });
     }
 
     fn start_merge(&mut self, ctx: &egui::Context, job: Job) {
@@ -482,13 +557,14 @@ impl App {
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(&mut child, |ui| {
             // Rows follow each other every 24 pt, as in the macOS List.
             ui.spacing_mut().item_spacing.y = 0.0;
-            for i in 0..self.files.len() {
+            let list = if self.function == Function::Images { self.images.clone() } else { self.files.clone() };
+            for i in 0..list.len() {
                 let (row, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), if ui.is_enabled() { Sense::click() } else { Sense::hover() });
                 let selected = self.selected == Some(i);
                 if selected {
                     ui.painter().rect_filled(row, CornerRadius::same(5), p.selection);
                 }
-                ui.painter().text(pos2(row.left() + 6.0, row.center().y), Align2::LEFT_CENTER, format!("{}. {}", i + 1, file_name(&self.files[i])), regular(BODY), if selected { Color32::WHITE } else { p.text });
+                ui.painter().text(pos2(row.left() + 6.0, row.center().y), Align2::LEFT_CENTER, format!("{}. {}", i + 1, file_name(&list[i])), regular(BODY), if selected { Color32::WHITE } else { p.text });
                 if response.clicked() {
                     self.selected = Some(i);
                 }
@@ -533,6 +609,104 @@ impl App {
                 let help = "Merges the presentations and has Microsoft PowerPoint open and save the result. Your keyboard and mouse are not used.";
                 if mac_button(ui, p, "Merge and save with PowerPoint…", ButtonKind::Normal, can).on_hover_text(help).clicked() {
                     self.merge(ctx, true);
+                }
+            });
+        });
+        self.status_and_results(ui, p);
+    }
+
+    fn images_bottom(&mut self, ui: &mut egui::Ui, ctx: &egui::Context, p: &Palette, modal: bool) {
+        let before = self.settings.clone();
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = 16.0;
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new("Layout").font(regular(BODY)).color(p.text));
+                let titles: Vec<&str> = crate::images::LAYOUTS.iter().map(|l| l.title()).collect();
+                let current = crate::images::LAYOUTS.iter().position(|l| crate::images::ImageLayout::parse(&self.settings.image_layout) == Some(*l)).unwrap_or(0);
+                if let Some(i) = segmented(ui, p, &titles, current) {
+                    self.settings.image_layout = ["one", "four", "random"][i].into();
+                }
+            });
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new("Transition").font(regular(BODY)).color(p.text));
+                // macOS pop-up button: the current choice and a chevron; the menu lists the others.
+                let title = crate::images::transition_title(&self.settings.image_transition);
+                let button = popup_button(ui, p, &title);
+                let id = ui.make_persistent_id("transition-menu");
+                if button.clicked() {
+                    ui.memory_mut(|m| m.toggle_popup(id));
+                }
+                egui::popup_below_widget(ui, id, &button, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                    ui.set_min_width(120.0);
+                    for name in crate::images::TRANSITIONS {
+                        let chosen = self.settings.image_transition == name;
+                        if ui.selectable_label(chosen, RichText::new(crate::images::transition_title(name)).font(regular(BODY))).clicked() {
+                            self.settings.image_transition = name.into();
+                        }
+                    }
+                });
+            });
+        });
+        ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new("Advance").font(regular(BODY)).color(p.text));
+                if radio(ui, p, self.settings.image_advance == 0, "On click") {
+                    self.settings.image_advance = 0;
+                }
+                if radio(ui, p, self.settings.image_advance > 0, "Every") {
+                    self.settings.image_advance = self.advance_text.parse::<i64>().ok().filter(|n| (1..=3600).contains(n)).unwrap_or(5);
+                }
+                let mut seconds = self.settings.image_advance.max(1);
+                let mut text = self.advance_text.clone();
+                if number_field(ui, p, &mut seconds, &mut text, "advance") && (1..=3600).contains(&seconds) {
+                    self.settings.image_advance = seconds;
+                }
+                self.advance_text = text;
+                ui.label(RichText::new("s").font(regular(BODY)).color(p.text));
+            });
+        });
+        if self.settings != before {
+            self.settings.save();
+        }
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = 8.0;
+            if mac_button(ui, p, "Add images…", ButtonKind::Normal, true).clicked() {
+                if let Some(files) = rfd::FileDialog::new().add_filter("Pictures", &crate::images::IMAGE_EXTENSIONS).pick_files() {
+                    self.add_images(files);
+                }
+            }
+            if mac_button(ui, p, "Add folder…", ButtonKind::Normal, true).clicked() {
+                if let Some(folders) = rfd::FileDialog::new().pick_folders() {
+                    self.add_images(folders);
+                }
+            }
+            let sel = self.selected.filter(|i| *i < self.images.len());
+            if mac_button(ui, p, "Up", ButtonKind::Normal, sel.is_some()).clicked() {
+                if let Some(i) = sel.filter(|i| *i > 0) {
+                    self.images.swap(i, i - 1);
+                    self.selected = Some(i - 1);
+                }
+            }
+            if mac_button(ui, p, "Down", ButtonKind::Normal, sel.is_some()).clicked() {
+                if let Some(i) = sel.filter(|i| i + 1 < self.images.len()) {
+                    self.images.swap(i, i + 1);
+                    self.selected = Some(i + 1);
+                }
+            }
+            if mac_button(ui, p, "Remove", ButtonKind::Normal, sel.is_some()).clicked() {
+                if let Some(i) = sel {
+                    self.images.remove(i);
+                    self.selected = None;
+                }
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let can = !self.images.is_empty();
+                let enter = can && ui.is_enabled() && !modal && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if mac_button(ui, p, "Create presentation…", ButtonKind::Default, can).clicked() || enter {
+                    self.start_images(ctx);
                 }
             });
         });
@@ -792,6 +966,7 @@ impl App {
         }
         if let Ok(files) = std::env::var("PPTSHOWTOOLS_SNAP_FILES") {
             self.files = files.split('|').map(PathBuf::from).collect();
+            self.images = self.files.clone();
             self.selected = std::env::var("PPTSHOWTOOLS_SNAP_SEL").ok().and_then(|s| s.parse().ok());
         }
         if std::env::var("PPTSHOWTOOLS_SNAP_SETTINGS").is_ok() {
@@ -842,6 +1017,8 @@ impl eframe::App for App {
         if !dropped.is_empty() && !self.busy && !modal {
             if self.function == Function::Merge {
                 self.add(dropped);
+            } else if self.function == Function::Images {
+                self.add_images(dropped);
             } else if let Some(f) = dropped.into_iter().next() {
                 self.source = Some(f);
                 self.tool_report = None;
@@ -849,10 +1026,10 @@ impl eframe::App for App {
         }
         let page = egui::Frame::NONE.fill(p.bg).inner_margin(egui::Margin { left: 24, right: 24, top: 24, bottom: 24 });
         let enabled = !self.busy && !modal;
-        if self.function == Function::Merge {
+        if self.function == Function::Merge || self.function == Function::Images {
             egui::TopBottomPanel::bottom("merge-bottom").frame(egui::Frame::NONE.fill(p.bg).inner_margin(egui::Margin { left: 24, right: 24, top: 0, bottom: 24 })).show_separator_line(false).show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 16.0;
-                ui.add_enabled_ui(enabled, |ui| self.merge_bottom(ui, ctx, &p, modal));
+                ui.add_enabled_ui(enabled, |ui| if self.function == Function::Images { self.images_bottom(ui, ctx, &p, modal) } else { self.merge_bottom(ui, ctx, &p, modal) });
             });
             egui::CentralPanel::default().frame(page).show(ctx, |ui| {
                 ui.spacing_mut().item_spacing.y = 16.0;
