@@ -17,6 +17,7 @@ Everything is on one screen: choose a **Function** and follow the controls below
 | **Resize slides** | Changes the slides to the size set in Settings (with *Automatic*, to 16:9) without changing the design; only the background grows (see *How slides are resized*). |
 | **Extract notes** | One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”. |
 | **Images to PowerPoint** | Pictures or folders (dropped or chosen) become a presentation: one per slide, four per slide, or a random mix of one to four. Pictures are never cropped or stretched; JPEG, PNG and GIF go in byte for byte, HEIC/HEIF, WebP, AVIF, TIFF and BMP are converted (JPEG, or PNG with transparency) and sideways photos are turned upright. Optional transition (fade, push, wipe, split, cover, dissolve, zoom, random) and automatic advance. One per slide uses a black background; with four per slide or random you choose the background colour. |
+| **Extract media** | Copies the pictures, sounds and videos placed on all slides, or on the slides you list (for example `1-3, 5, 8`), into a new folder named after the presentation, byte for byte, as `slide-03-image-1.png`. Choose which kinds to extract. A file used on several slides is extracted once; poster frames of videos and sounds, pictures from layouts and masters, and media only linked outside the file are not extracted (the report lists the links). |
 
 ## Settings: slide size
 
@@ -82,6 +83,7 @@ PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx
 PPTShowTools --resize [--size WxH] output.pptx input.pptx
 PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf
 PPTShowTools --extract-notes output.pptx input.pptx
+PPTShowTools --extract-media [--kinds images,audio,video] [--slides all|1-3,5] destination-folder input.pptx
 PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition NAME] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]
 ```
 
@@ -90,7 +92,7 @@ PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transiti
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize test_images
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize test_images test_media
 ```
 
 `PPTSHOWTOOLS_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.

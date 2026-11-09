@@ -47,7 +47,7 @@ pub(crate) fn unpack(input: &Path, root: &Path) -> Result<()> {
     Ok(())
 }
 
-fn emit(report: &ToolReport) -> Result<()> {
+pub(crate) fn emit(report: &ToolReport) -> Result<()> {
     let output = PathBuf::from(&report.output);
     crate::reports::write(&output, ".report.json", &crate::to_json(report)?)?;
     let warnings: Vec<String> = report.pages.iter().flat_map(|p| p.warnings.iter().map(move |w| format!("Slide {}: {w}", p.source_page))).collect();

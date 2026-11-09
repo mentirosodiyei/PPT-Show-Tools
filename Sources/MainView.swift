@@ -3,7 +3,7 @@ import AppKit
 import UniformTypeIdentifiers
 
 enum DeckFunction: String, CaseIterable, Identifiable {
-    case merge = "Merge", pdf = "PDF to PowerPoint", resize = "Resize slides", notes = "Extract notes", images = "Images to PowerPoint"
+    case merge = "Merge", pdf = "PDF to PowerPoint", resize = "Resize slides", notes = "Extract notes", images = "Images to PowerPoint", media = "Extract media"
     var id: String { rawValue }
 }
 
@@ -25,6 +25,11 @@ struct MainView: View {
             imageBackground = String(format: "%02X%02X%02X", Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
         })
     }
+    @AppStorage("mediaImages") private var mediaImages = true
+    @AppStorage("mediaAudio") private var mediaAudio = true
+    @AppStorage("mediaVideo") private var mediaVideo = true
+    @State private var someSlides = false
+    @State private var slidesText = ""
     @State private var function = DeckFunction.merge
     @State private var images: [URL] = []
     @State private var advanceText = "5"
@@ -60,6 +65,8 @@ struct MainView: View {
                 : "Adapts the slides to \(sizeSummary): the design does not change: the content is scaled as a whole and centred, and only the background extends into the new margins (photos with their own colours, videos with a blurred copy)."
         case .notes:
             return "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”."
+        case .media:
+            return "Copies the pictures, sounds and videos placed on the chosen slides into a new folder, byte for byte. Pictures from layouts and masters (logos, template backgrounds) are not included."
         case .images:
             return "One slide per picture, or several per slide. Pictures are never cropped or stretched; JPEG, PNG and GIF go in unchanged. Slide size: \(isAutomatic ? "16:9 (1280 × 720 px)" : sizeSummary)."
         }
@@ -72,9 +79,10 @@ struct MainView: View {
                 Spacer()
                 Button("Settings…") { showSettings = true }
             }
+            // A pop-up menu: the list of functions keeps growing.
             Picker("Function", selection: $function) {
                 ForEach(DeckFunction.allCases) { Text($0.rawValue).tag($0) }
-            }.pickerStyle(.segmented).fixedSize()
+            }.pickerStyle(.menu).fixedSize()
             Text(explanation).font(.callout).foregroundStyle(.secondary)
             if function == .merge { mergeContent } else if function == .images { imageContent } else { fileContent }
             if busy { ProgressView(function == .merge ? "Merging…" : "Converting and checking…") }
@@ -286,6 +294,7 @@ struct MainView: View {
         case .notes: return "Extract notes…"
         case .merge: return "Merge…"
         case .images: return "Create presentation…"
+        case .media: return "Extract media…"
         }
     }
 
@@ -295,8 +304,28 @@ struct MainView: View {
                 Button("Choose file…", action: choose)
                 Text(source?.lastPathComponent ?? "No file selected").lineLimit(2).textSelection(.enabled)
             }
-            Text("A new file is created; the original is not changed. The checks run automatically.").font(.callout).foregroundStyle(.secondary)
-            Button(actionTitle, action: startTool).disabled(source == nil).keyboardShortcut(.defaultAction)
+            if function == .media { mediaOptions }
+            Text(function == .media ? "The files are copied into a new folder; the presentation is not changed." : "A new file is created; the original is not changed. The checks run automatically.").font(.callout).foregroundStyle(.secondary)
+            Button(actionTitle, action: startTool).disabled(source == nil || (function == .media && !mediaImages && !mediaAudio && !mediaVideo)).keyboardShortcut(.defaultAction)
+        }
+    }
+
+    private var mediaOptions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 16) {
+                Text("Extract")
+                Toggle("Images", isOn: $mediaImages)
+                Toggle("Audio", isOn: $mediaAudio)
+                Toggle("Video", isOn: $mediaVideo)
+            }.toggleStyle(.checkbox)
+            HStack(spacing: 8) {
+                Picker("From", selection: $someSlides) {
+                    Text("All slides").tag(false)
+                    Text("Slides:").tag(true)
+                }.pickerStyle(.radioGroup).horizontalRadioGroupLayout().fixedSize()
+                TextField("1-3, 5, 8", text: $slidesText).frame(width: 140)
+                    .onChange(of: slidesText) { if !slidesText.isEmpty { someSlides = true } }
+            }
         }
     }
 
@@ -305,8 +334,34 @@ struct MainView: View {
         if panel.runModal() == .OK { source = panel.url; toolReport = nil; status = "Ready to create a new copy." }
     }
 
+    private func extractMedia(_ source: URL) {
+        var kinds = Set<MediaKind>()
+        if mediaImages { kinds.insert(.images) }
+        if mediaAudio { kinds.insert(.audio) }
+        if mediaVideo { kinds.insert(.video) }
+        let slides = someSlides ? slidesText : "all"
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+        panel.directoryURL = source.deletingLastPathComponent()
+        panel.prompt = "Extract Here"
+        panel.message = "A new folder, “\(source.deletingPathExtension().lastPathComponent) media”, is created inside the folder you choose."
+        guard panel.runModal() == .OK, let destination = panel.url else { return }
+        busy = true; toolReport = nil; mergeResult = nil; status = "Extracting and checking…"
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let report = try PresentationTools.extractMedia(input: source, destination: destination, kinds: kinds, slides: slides)
+                let summary = report.checks.first ?? ""
+                DispatchQueue.main.async { toolReport = report; busy = false; status = summary + ", copied into “\(URL(fileURLWithPath: report.output).lastPathComponent)”." }
+            } catch {
+                let log = PresentationTools.logFailure(output: destination.appendingPathComponent("media"), error: error)
+                DispatchQueue.main.async { busy = false; status = "STOPPED: " + error.localizedDescription + "\nLog: " + log }
+            }
+        }
+    }
+
     private func startTool() {
         guard let source else { return }
+        if function == .media { extractMedia(source); return }
         let fixed: (Int64, Int64)?
         do { fixed = try SlideSizeChoice.fixedSize(choice: sizeChoice, width: customWidth, height: customHeight) } catch { status = error.localizedDescription; return }
         let task = function
@@ -325,7 +380,7 @@ struct MainView: View {
                 case .pdf: report = try PresentationTools.pdfToPPT(input: source, output: output, fixedSize: fixed)
                 case .resize: report = try PresentationTools.resize(input: source, output: output, fixedSize: fixed)
                 case .notes: report = try PresentationTools.extractNotes(input: source, output: output)
-                case .merge, .images: return
+                case .merge, .images, .media: return
                 }
                 DispatchQueue.main.async { toolReport = report; busy = false; status = "\(report.pages.count) slides created. Checks passed; review the appearance and the warnings in the report." }
             } catch {

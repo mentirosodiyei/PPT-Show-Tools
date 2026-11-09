@@ -3,7 +3,7 @@ name = "pptshowtools"
 version = "0.9.0"
 edition = "2021"
 authors = ["David Redondo García"]
-description = "PPT Show Tools for Windows: merge presentations, PDF to PowerPoint, resize slides, extract notes and images to PowerPoint"
+description = "PPT Show Tools for Windows: merge presentations, PDF to PowerPoint, resize slides, extract notes, images to PowerPoint and extract media"
 build = "build.rs"
 
 [[bin]]

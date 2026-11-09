@@ -121,6 +121,35 @@ fn mac_button(ui: &mut egui::Ui, p: &Palette, label: &str, kind: ButtonKind, ena
     response
 }
 
+/// macOS checkbox: 14 pt rounded square, blue with a white tick when on.
+fn checkbox(ui: &mut egui::Ui, p: &Palette, on: &mut bool, text: &str) -> bool {
+    let galley = ui.painter().layout_no_wrap(text.to_string(), regular(BODY), p.text);
+    let (rect, response) = ui.allocate_exact_size(vec2(22.0 + galley.size().x, 22.0), Sense::click());
+    let square = Rect::from_center_size(pos2(rect.left() + 8.0, rect.center().y), vec2(14.0, 14.0));
+    if *on {
+        ui.painter().rect_filled(square, CornerRadius::same(3), p.accent);
+        let c = square.center();
+        ui.painter().line(vec![pos2(c.x - 3.5, c.y + 0.2), pos2(c.x - 1.0, c.y + 2.8), pos2(c.x + 3.8, c.y - 2.8)], Stroke::new(1.8_f32, Color32::WHITE));
+    } else {
+        ui.painter().rect(square, CornerRadius::same(3), p.field, Stroke::new(1.0_f32, p.field_stroke), egui::StrokeKind::Inside);
+    }
+    ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, p.text);
+    if response.clicked() {
+        *on = !*on;
+        return true;
+    }
+    false
+}
+
+/// Rounded macOS text field with a grey placeholder.
+fn text_field(ui: &mut egui::Ui, p: &Palette, buffer: &mut String, hint: &str, width: f32, id: &str) -> bool {
+    let (rect, _) = ui.allocate_exact_size(vec2(width, 24.0), Sense::hover());
+    ui.painter().rect(rect, CornerRadius::same(6), p.field, Stroke::new(1.0_f32, p.field_stroke), egui::StrokeKind::Inside);
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect.shrink2(vec2(8.0, 4.0))));
+    let edit = egui::TextEdit::singleline(buffer).id(egui::Id::new(id)).frame(false).font(regular(BODY)).text_color(p.text).hint_text(RichText::new(hint).color(p.secondary)).desired_width(width - 16.0);
+    child.add(edit).changed()
+}
+
 /// macOS pop-up button: the current choice and up/down chevrons on the right.
 fn popup_button(ui: &mut egui::Ui, p: &Palette, label: &str) -> egui::Response {
     let enabled = ui.is_enabled();
@@ -214,8 +243,9 @@ enum Function {
     Resize,
     Notes,
     Images,
+    Media,
 }
-const FUNCTIONS: [Function; 5] = [Function::Merge, Function::Pdf, Function::Resize, Function::Notes, Function::Images];
+const FUNCTIONS: [Function; 6] = [Function::Merge, Function::Pdf, Function::Resize, Function::Notes, Function::Images, Function::Media];
 impl Function {
     fn title(self) -> &'static str {
         match self {
@@ -224,6 +254,7 @@ impl Function {
             Function::Resize => "Resize slides",
             Function::Notes => "Extract notes",
             Function::Images => "Images to PowerPoint",
+            Function::Media => "Extract media",
         }
     }
     fn action(self) -> &'static str {
@@ -233,6 +264,7 @@ impl Function {
             Function::Resize => "Resize…",
             Function::Notes => "Extract notes…",
             Function::Images => "Create presentation…",
+            Function::Media => "Extract media…",
         }
     }
 }
@@ -265,6 +297,8 @@ struct App {
     files: Vec<PathBuf>,
     images: Vec<PathBuf>,
     advance_text: String,
+    some_slides: bool,
+    slides_text: String,
     selected: Option<usize>,
     source: Option<PathBuf>,
     busy: bool,
@@ -299,6 +333,8 @@ impl App {
             files: vec![],
             images: vec![],
             advance_text: "5".into(),
+            some_slides: false,
+            slides_text: String::new(),
             selected: None,
             source: None,
             busy: false,
@@ -328,6 +364,7 @@ impl App {
             Function::Resize if automatic => "Widens the slides to 16:9 without changing the design: the content is scaled as a whole and centred, and only the background extends into the new margins. Choose another size in Settings.".into(),
             Function::Resize => format!("Adapts the slides to {size}: the design does not change: the content is scaled as a whole and centred, and only the background extends into the new margins (photos with their own colours, videos with a blurred copy)."),
             Function::Notes => "One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”.".into(),
+            Function::Media => "Copies the pictures, sounds and videos placed on the chosen slides into a new folder, byte for byte. Pictures from layouts and masters (logos, template backgrounds) are not included.".into(),
             Function::Images => format!("One slide per picture, or several per slide. Pictures are never cropped or stretched; JPEG, PNG and GIF go in unchanged. Slide size: {}.", if automatic { "16:9 (1280 × 720 px)".to_string() } else { size }),
         }
     }
@@ -474,6 +511,10 @@ impl App {
             Msg::Tool(result) => {
                 self.busy = false;
                 match result {
+                    Ok(report) if self.function == Function::Media => {
+                        self.status = format!("{}, copied into “{}”.", report.checks.first().cloned().unwrap_or_default(), file_name(Path::new(&report.output)));
+                        self.tool_report = Some(report);
+                    }
                     Ok(report) => {
                         self.status = format!("{} slides created. Checks passed; review the appearance and the warnings in the report.", report.pages.len());
                         self.tool_report = Some(report);
@@ -484,8 +525,44 @@ impl App {
         }
     }
 
+    fn start_media(&mut self, ctx: &egui::Context, source: PathBuf) {
+        let mut kinds = vec![];
+        if self.settings.media_images {
+            kinds.push(crate::media::MediaKind::Images);
+        }
+        if self.settings.media_audio {
+            kinds.push(crate::media::MediaKind::Audio);
+        }
+        if self.settings.media_video {
+            kinds.push(crate::media::MediaKind::Video);
+        }
+        let slides = if self.some_slides { self.slides_text.clone() } else { "all".into() };
+        let mut dialog = rfd::FileDialog::new().set_title("Choose where to create the media folder");
+        if let Some(dir) = source.parent() {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(destination) = dialog.pick_folder() else { return };
+        self.busy = true;
+        self.tool_report = None;
+        self.merge_result = None;
+        self.status = "Extracting and checking…".into();
+        let tx = self.tx.clone();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = crate::media::extract_media(&source, &destination, &kinds, &slides).map_err(|e| {
+                let log = crate::reports::log_failure(&destination.join("media"), &e.to_string());
+                format!("STOPPED: {e}\nLog: {log}")
+            });
+            let _ = tx.send(Msg::Tool(result));
+            ctx.request_repaint();
+        });
+    }
+
     fn start_tool(&mut self, ctx: &egui::Context) {
         let Some(source) = self.source.clone() else { return };
+        if self.function == Function::Media {
+            return self.start_media(ctx, source);
+        }
         let fixed = match self.settings.fixed_size() {
             Ok(f) => f,
             Err(e) => {
@@ -541,10 +618,23 @@ impl App {
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 8.0;
             ui.label(RichText::new("Function").font(regular(BODY)).color(p.text));
-            let titles: Vec<&str> = FUNCTIONS.iter().map(|f| f.title()).collect();
-            let current = FUNCTIONS.iter().position(|f| *f == self.function).unwrap_or(0);
-            if let Some(i) = segmented(ui, p, &titles, current) {
-                self.set_function(FUNCTIONS[i]);
+            // A pop-up menu, as on the Mac: the list of functions keeps growing.
+            let button = popup_button(ui, p, self.function.title());
+            let id = ui.make_persistent_id("function-menu");
+            if button.clicked() {
+                ui.memory_mut(|m| m.toggle_popup(id));
+            }
+            let mut picked = None;
+            egui::popup_below_widget(ui, id, &button, egui::PopupCloseBehavior::CloseOnClick, |ui| {
+                ui.set_min_width(200.0);
+                for f in FUNCTIONS {
+                    if ui.selectable_label(f == self.function, RichText::new(f.title()).font(regular(BODY))).clicked() {
+                        picked = Some(f);
+                    }
+                }
+            });
+            if let Some(f) = picked {
+                self.set_function(f);
             }
         });
         let text = self.explanation();
@@ -740,8 +830,38 @@ impl App {
             }
             ui.label(RichText::new(self.source.as_ref().map(|s| file_name(s)).unwrap_or_else(|| "No file selected".into())).font(regular(BODY)).color(p.text));
         });
-        label(ui, "A new file is created; the original is not changed. The checks run automatically.", regular(CALLOUT), p.secondary);
-        let can = self.source.is_some();
+        if self.function == Function::Media {
+            let before = self.settings.clone();
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 16.0;
+                ui.label(RichText::new("Extract").font(regular(BODY)).color(p.text));
+                checkbox(ui, p, &mut self.settings.media_images, "Images");
+                checkbox(ui, p, &mut self.settings.media_audio, "Audio");
+                checkbox(ui, p, &mut self.settings.media_video, "Video");
+            });
+            if self.settings != before {
+                self.settings.save();
+            }
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = 8.0;
+                ui.label(RichText::new("From").font(regular(BODY)).color(p.text));
+                if radio(ui, p, !self.some_slides, "All slides") {
+                    self.some_slides = false;
+                }
+                if radio(ui, p, self.some_slides, "Slides:") {
+                    self.some_slides = true;
+                }
+                let mut text = self.slides_text.clone();
+                if text_field(ui, p, &mut text, "1-3, 5, 8", 140.0, "slides") && !text.is_empty() {
+                    self.some_slides = true;
+                }
+                self.slides_text = text;
+            });
+        }
+        let note = if self.function == Function::Media { "The files are copied into a new folder; the presentation is not changed." } else { "A new file is created; the original is not changed. The checks run automatically." };
+        label(ui, note, regular(CALLOUT), p.secondary);
+        let any_kind = self.settings.media_images || self.settings.media_audio || self.settings.media_video;
+        let can = self.source.is_some() && (self.function != Function::Media || any_kind);
         let enter = can && ui.is_enabled() && !modal && ui.input(|i| i.key_pressed(egui::Key::Enter));
         if mac_button(ui, p, self.function.action(), ButtonKind::Default, can).clicked() || enter {
             self.start_tool(ctx);

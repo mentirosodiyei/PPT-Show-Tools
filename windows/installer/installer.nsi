@@ -96,7 +96,7 @@ Section "Desktop shortcut" SecDesktop
   CreateShortcut "$DESKTOP\PPT Show Tools.lnk" "$INSTDIR\PPTShowTools.exe" "" "$INSTDIR\PPTShowTools.exe" 0
 SectionEnd
 
-LangString DESC_Main ${LANG_ENGLISH} "The application: merge presentations, PDF to PowerPoint, resize slides, extract notes and images to PowerPoint."
+LangString DESC_Main ${LANG_ENGLISH} "The application: merge presentations, PDF to PowerPoint, resize slides, extract notes, images to PowerPoint and extract media."
 LangString DESC_Desktop ${LANG_ENGLISH} "Adds a PPT Show Tools icon to the desktop."
 !insertmacro MUI_FUNCTION_DESCRIPTION_BEGIN
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_Main)

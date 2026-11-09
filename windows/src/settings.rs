@@ -56,10 +56,14 @@ pub struct Settings {
     pub image_advance: i64,
     /// Background colour (RRGGBB) when there are several pictures per slide.
     pub image_background: String,
+    /// Extract media: which kinds are ticked.
+    pub media_images: bool,
+    pub media_audio: bool,
+    pub media_video: bool,
 }
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0, image_background: "000000".into() }
+        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0, image_background: "000000".into(), media_images: true, media_audio: true, media_video: true }
     }
 }
 

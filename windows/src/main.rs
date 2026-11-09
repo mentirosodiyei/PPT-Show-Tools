@@ -3,6 +3,7 @@
 
 mod gui;
 mod images;
+mod media;
 mod merge;
 mod office;
 mod package;
@@ -61,6 +62,7 @@ fn run_cli(all: &[String]) -> i32 {
     let mut args: Vec<&String> = vec![];
     let mut size: Option<&String> = None;
     let (mut layout, mut transition, mut advance, mut background) = ("one".to_string(), "none".to_string(), None::<String>, "000000".to_string());
+    let (mut kinds, mut slides) = ("images,audio,video".to_string(), "all".to_string());
     let mut i = 0;
     while i < all.len() {
         // --fit-non169 is accepted for compatibility: every size is now adapted.
@@ -73,8 +75,10 @@ fn run_cli(all: &[String]) -> i32 {
             i += 2;
             continue;
         }
-        if ["--layout", "--transition", "--advance", "--background"].contains(&all[i].as_str()) && i + 1 < all.len() {
+        if ["--layout", "--transition", "--advance", "--background", "--kinds", "--slides"].contains(&all[i].as_str()) && i + 1 < all.len() {
             match all[i].as_str() {
+                "--kinds" => kinds = all[i + 1].clone(),
+                "--slides" => slides = all[i + 1].clone(),
                 "--layout" => layout = all[i + 1].clone(),
                 "--background" => background = all[i + 1].trim_start_matches('#').to_string(),
                 "--transition" => transition = all[i + 1].clone(),
@@ -114,6 +118,27 @@ fn run_cli(all: &[String]) -> i32 {
                 let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]))?;
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
+            }
+            "--extract-media" if args.len() == 4 => {
+                let mut chosen = vec![];
+                for k in kinds.to_lowercase().split(',') {
+                    match media::MediaKind::parse(k.trim()) {
+                        Some(kind) => chosen.push(kind),
+                        None => return fail("--kinds takes images, audio and/or video, separated by commas."),
+                    }
+                }
+                let destination = PathBuf::from(args[2]);
+                match media::extract_media(&PathBuf::from(args[3]), &destination, &chosen, &slides) {
+                    Ok(r) => {
+                        print_json(&r)?;
+                        Ok(0)
+                    }
+                    Err(e) => {
+                        let log = reports::log_failure(&destination.join("media"), &e.to_string());
+                        eprintln!("{e}\nLog: {log}");
+                        Ok(1)
+                    }
+                }
             }
             "--images-to-ppt" if args.len() >= 4 => {
                 let Some(chosen) = images::ImageLayout::parse(&layout) else { return fail("--layout must be one, four or random.") };
@@ -164,7 +189,7 @@ fn run_cli(all: &[String]) -> i32 {
                 println!("{} slides. Report: {}", report.total_slides, report_path(args[2]));
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }
-            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx\n       PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]"),
+            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx\n       PPTShowTools --extract-media [--kinds images,audio,video] [--slides all|1-3,5] destination-folder input.pptx\n       PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]"),
         }
     })();
     match result {

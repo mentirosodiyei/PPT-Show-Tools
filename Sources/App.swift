@@ -70,7 +70,7 @@ struct PPTShowToolsApp: App {
 
     /// Same commands as the Windows build, used by the test suite.
     static func runCommandLine(_ all: [String]) -> Int32 {
-        var args: [String] = [], size: String?, layout = "one", transition = "none", advance: String?, background = "000000", i = 0
+        var args: [String] = [], size: String?, layout = "one", transition = "none", advance: String?, background = "000000", kinds = "images,audio,video", slides = "all", i = 0
         while i < all.count {
             // --fit-non169 is accepted for compatibility: every size is now adapted.
             if all[i] == "--fit-non169" { i += 1; continue }
@@ -78,6 +78,8 @@ struct PPTShowToolsApp: App {
             if all[i] == "--layout", i + 1 < all.count { layout = all[i + 1]; i += 2; continue }
             if all[i] == "--transition", i + 1 < all.count { transition = all[i + 1]; i += 2; continue }
             if all[i] == "--advance", i + 1 < all.count { advance = all[i + 1]; i += 2; continue }
+            if all[i] == "--kinds", i + 1 < all.count { kinds = all[i + 1]; i += 2; continue }
+            if all[i] == "--slides", i + 1 < all.count { slides = all[i + 1]; i += 2; continue }
             if all[i] == "--background", i + 1 < all.count { background = all[i + 1].replacingOccurrences(of: "#", with: ""); i += 2; continue }
             args.append(all[i]); i += 1
         }
@@ -102,6 +104,18 @@ struct PPTShowToolsApp: App {
             case "--verify" where args.count >= 5:
                 let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
+            case "--extract-media" where args.count == 4:
+                var chosen = Set<MediaKind>()
+                for k in kinds.lowercased().split(separator: ",") {
+                    guard let kind = MediaKind(rawValue: k.trimmingCharacters(in: .whitespaces)) else { try fail("--kinds takes images, audio and/or video, separated by commas.") }
+                    chosen.insert(kind)
+                }
+                let destination = URL(fileURLWithPath: args[2])
+                do {
+                    try printJSON(try PresentationTools.extractMedia(input: URL(fileURLWithPath: args[3]), destination: destination, kinds: chosen, slides: slides)); return 0
+                } catch {
+                    fputs(error.localizedDescription + "\nLog: " + ReportStore.logFailure(output: destination.appendingPathComponent("media"), error: error) + "\n", stderr); return 1
+                }
             case "--images-to-ppt" where args.count >= 4:
                 guard let chosenLayout = ImageLayout(rawValue: layout) else { try fail("--layout must be one, four or random.") }
                 guard let chosenTransition = SlideTransition(rawValue: transition) else { try fail("--transition must be one of: " + SlideTransition.allCases.map(\.rawValue).joined(separator: ", ") + ".") }
@@ -143,6 +157,7 @@ struct PPTShowToolsApp: App {
                    PPTShowTools --resize [--size WxH] output.pptx input.pptx
                    PPTShowTools --pdf-to-ppt output.pptx input.pdf
                    PPTShowTools --extract-notes output.pptx input.pptx
+                   PPTShowTools --extract-media [--kinds images,audio,video] [--slides all|1-3,5] destination-folder input.pptx
                    PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]
             """)
         } catch {
