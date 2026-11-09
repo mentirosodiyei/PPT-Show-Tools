@@ -60,7 +60,7 @@ fn attach_console() {
 fn run_cli(all: &[String]) -> i32 {
     let mut args: Vec<&String> = vec![];
     let mut size: Option<&String> = None;
-    let (mut layout, mut transition, mut advance) = ("one".to_string(), "none".to_string(), None::<String>);
+    let (mut layout, mut transition, mut advance, mut background) = ("one".to_string(), "none".to_string(), None::<String>, "000000".to_string());
     let mut i = 0;
     while i < all.len() {
         // --fit-non169 is accepted for compatibility: every size is now adapted.
@@ -73,9 +73,10 @@ fn run_cli(all: &[String]) -> i32 {
             i += 2;
             continue;
         }
-        if ["--layout", "--transition", "--advance"].contains(&all[i].as_str()) && i + 1 < all.len() {
+        if ["--layout", "--transition", "--advance", "--background"].contains(&all[i].as_str()) && i + 1 < all.len() {
             match all[i].as_str() {
                 "--layout" => layout = all[i + 1].clone(),
+                "--background" => background = all[i + 1].trim_start_matches('#').to_string(),
                 "--transition" => transition = all[i + 1].clone(),
                 _ => advance = Some(all[i + 1].clone()),
             }
@@ -121,7 +122,7 @@ fn run_cli(all: &[String]) -> i32 {
                     None => None,
                 };
                 let output = PathBuf::from(args[2]);
-                match images::images_to_ppt(&paths(3), &output, fixed, chosen, &transition, seconds) {
+                match images::images_to_ppt(&paths(3), &output, fixed, chosen, &transition, seconds, &background) {
                     Ok(r) => {
                         print_json(&r)?;
                         Ok(0)
@@ -163,7 +164,7 @@ fn run_cli(all: &[String]) -> i32 {
                 println!("{} slides. Report: {}", report.total_slides, report_path(args[2]));
                 Ok(if report.structural_validation_passed() { 0 } else { 2 })
             }
-            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx\n       PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] output.pptx image-or-folder […]"),
+            _ => fail("Usage: PPTShowTools --merge [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx […]\n       PPTShowTools --resize [--size WxH] output.pptx input.pptx\n       PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf\n       PPTShowTools --extract-notes output.pptx input.pptx\n       PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]"),
         }
     })();
     match result {

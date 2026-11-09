@@ -16,7 +16,7 @@ Everything is on one screen: choose a **Function** and follow the controls below
 | **PDF to PowerPoint** | One slide per PDF page, as an image. Slides take the size set in Settings (with *Automatic*, the first page's proportion); text is not editable. |
 | **Resize slides** | Changes the slides to the size set in Settings (with *Automatic*, to 16:9) without changing the design; only the background grows (see *How slides are resized*). |
 | **Extract notes** | One black 16:9 slide per original slide, with its speaker notes as editable white text. Slides without notes show “No Notes on this slide”. |
-| **Images to PowerPoint** | Pictures or folders (dropped or chosen) become a presentation: one per slide, four per slide, or a random mix of one to four. Pictures are never cropped or stretched; JPEG, PNG and GIF go in byte for byte, HEIC/HEIF, WebP, AVIF, TIFF and BMP are converted (JPEG, or PNG with transparency) and sideways photos are turned upright. Optional transition (fade, push, wipe, split, cover, dissolve, zoom, random) and automatic advance. |
+| **Images to PowerPoint** | Pictures or folders (dropped or chosen) become a presentation: one per slide, four per slide, or a random mix of one to four. Pictures are never cropped or stretched; JPEG, PNG and GIF go in byte for byte, HEIC/HEIF, WebP, AVIF, TIFF and BMP are converted (JPEG, or PNG with transparency) and sideways photos are turned upright. Optional transition (fade, push, wipe, split, cover, dissolve, zoom, random) and automatic advance. One per slide uses a black background; with four per slide or random you choose the background colour. |
 
 ## Settings: slide size
 
@@ -82,7 +82,7 @@ PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx
 PPTShowTools --resize [--size WxH] output.pptx input.pptx
 PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf
 PPTShowTools --extract-notes output.pptx input.pptx
-PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition NAME] [--advance SECONDS] output.pptx image-or-folder […]
+PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition NAME] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]
 ```
 
 `--size` takes pixels (`4800x1344`) or `auto`. `--fit-non169` is still accepted by older scripts and ignored.

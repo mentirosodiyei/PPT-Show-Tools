@@ -14,6 +14,17 @@ struct MainView: View {
     @AppStorage("imageLayout") private var imageLayout = ImageLayout.one.rawValue
     @AppStorage("imageTransition") private var imageTransition = SlideTransition.fade.rawValue
     @AppStorage("imageAdvance") private var imageAdvance = 0   // seconds; 0 = on click
+    @AppStorage("imageBackground") private var imageBackground = "000000"   // RRGGBB, for several per slide
+    /// The background colour as a SwiftUI colour, stored as RRGGBB.
+    private var backgroundColour: Binding<Color> {
+        Binding(get: {
+            let v = Int(imageBackground, radix: 16) ?? 0
+            return Color(.sRGB, red: Double((v >> 16) & 255) / 255, green: Double((v >> 8) & 255) / 255, blue: Double(v & 255) / 255)
+        }, set: { colour in
+            guard let c = NSColor(colour).usingColorSpace(.sRGB) else { return }
+            imageBackground = String(format: "%02X%02X%02X", Int((c.redComponent * 255).rounded()), Int((c.greenComponent * 255).rounded()), Int((c.blueComponent * 255).rounded()))
+        })
+    }
     @State private var function = DeckFunction.merge
     @State private var images: [URL] = []
     @State private var advanceText = "5"
@@ -194,6 +205,10 @@ struct MainView: View {
                 Picker("Transition", selection: $imageTransition) {
                     ForEach(SlideTransition.allCases) { Text($0.title).tag($0.rawValue) }
                 }.pickerStyle(.menu).fixedSize()
+                // With several pictures per slide the background shows: the user picks it.
+                if imageLayout != ImageLayout.one.rawValue {
+                    ColorPicker("Background", selection: backgroundColour, supportsOpacity: false).fixedSize()
+                }
             }
             HStack(spacing: 8) {
                 Picker("Advance", selection: Binding(get: { imageAdvance > 0 }, set: { imageAdvance = $0 ? max(1, Int(advanceText) ?? 5) : 0 })) {
@@ -242,7 +257,7 @@ struct MainView: View {
         let fixed: (Int64, Int64)?
         do { fixed = try SlideSizeChoice.fixedSize(choice: sizeChoice, width: customWidth, height: customHeight) } catch { status = error.localizedDescription; return }
         let inputs = images, layout = ImageLayout(rawValue: imageLayout) ?? .one, transition = SlideTransition(rawValue: imageTransition) ?? .none
-        let advance = imageAdvance > 0 ? Double(imageAdvance) : nil
+        let advance = imageAdvance > 0 ? Double(imageAdvance) : nil, background = imageBackground
         let panel = NSSavePanel()
         let folder = inputs.first?.deletingLastPathComponent()
         panel.directoryURL = folder
@@ -252,7 +267,7 @@ struct MainView: View {
         busy = true; toolReport = nil; mergeResult = nil; status = "Creating and checking…"
         DispatchQueue.global(qos: .userInitiated).async {
             do {
-                let report = try PresentationTools.imagesToPPT(inputs: inputs, output: output, fixedSize: fixed, layout: layout, transition: transition, advance: advance)
+                let report = try PresentationTools.imagesToPPT(inputs: inputs, output: output, fixedSize: fixed, layout: layout, transition: transition, advance: advance, background: background)
                 let pictures = report.checks.first ?? ""
                 DispatchQueue.main.async { toolReport = report; busy = false; status = pictures + ". Checks passed; review the appearance in PowerPoint." }
             } catch {

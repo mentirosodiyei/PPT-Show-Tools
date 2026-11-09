@@ -378,6 +378,7 @@ impl App {
         let layout = crate::images::ImageLayout::parse(&self.settings.image_layout).unwrap_or(crate::images::ImageLayout::One);
         let transition = self.settings.image_transition.clone();
         let advance = (self.settings.image_advance > 0).then_some(self.settings.image_advance as f64);
+        let background = self.settings.image_background.clone();
         let folder = inputs.first().and_then(|f| f.parent().map(Path::to_path_buf));
         let name = folder.as_ref().map(|f| file_name(f)).filter(|n| !n.is_empty()).unwrap_or_else(|| "Pictures".into());
         let mut dialog = rfd::FileDialog::new().set_file_name(format!("{name}.pptx")).add_filter("PowerPoint", &["pptx"]);
@@ -392,7 +393,7 @@ impl App {
         let tx = self.tx.clone();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let result = crate::images::images_to_ppt(&inputs, &output, fixed, layout, &transition, advance).map_err(|e| {
+            let result = crate::images::images_to_ppt(&inputs, &output, fixed, layout, &transition, advance, &background).map_err(|e| {
                 let log = crate::reports::log_failure(&output, &e.to_string());
                 format!("STOPPED: {e}\nLog: {log}")
             });
@@ -648,6 +649,19 @@ impl App {
                     }
                 });
             });
+            // With several pictures per slide the background shows: the user picks it.
+            if self.settings.image_layout != "one" {
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    ui.label(RichText::new("Background").font(regular(BODY)).color(p.text));
+                    let v = u32::from_str_radix(&self.settings.image_background, 16).unwrap_or(0);
+                    let mut rgb = [(v >> 16) as u8, (v >> 8) as u8, v as u8];
+                    ui.spacing_mut().interact_size = vec2(44.0, 24.0);
+                    if egui::color_picker::color_edit_button_srgb(ui, &mut rgb).changed() {
+                        self.settings.image_background = format!("{:02X}{:02X}{:02X}", rgb[0], rgb[1], rgb[2]);
+                    }
+                });
+            }
         });
         ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -968,6 +982,10 @@ impl App {
             self.files = files.split('|').map(PathBuf::from).collect();
             self.images = self.files.clone();
             self.selected = std::env::var("PPTSHOWTOOLS_SNAP_SEL").ok().and_then(|s| s.parse().ok());
+        }
+        if let Ok(layout) = std::env::var("PPTSHOWTOOLS_SNAP_LAYOUT") {
+            self.settings.image_layout = layout;
+            self.settings.image_background = "1F3864".into();
         }
         if std::env::var("PPTSHOWTOOLS_SNAP_SETTINGS").is_ok() {
             self.show_settings = true;

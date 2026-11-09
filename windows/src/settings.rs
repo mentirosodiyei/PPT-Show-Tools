@@ -54,10 +54,12 @@ pub struct Settings {
     pub image_layout: String,
     pub image_transition: String,
     pub image_advance: i64,
+    /// Background colour (RRGGBB) when there are several pictures per slide.
+    pub image_background: String,
 }
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0 }
+        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0, image_background: "000000".into() }
     }
 }
 

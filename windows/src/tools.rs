@@ -317,6 +317,8 @@ pub struct SimpleDeck {
     image_pages: std::collections::HashSet<usize>,
     /// Picture formats in ppt/media, for [Content_Types].xml.
     pub extensions: std::collections::BTreeSet<String>,
+    /// Slide background colour (RRGGBB) replacing the black/white choice; None keeps it.
+    pub background: Option<String>,
 }
 
 pub(crate) fn esc(text: &str) -> String {
@@ -338,7 +340,7 @@ impl SimpleDeck {
         for folder in ["_rels", "ppt/_rels", "ppt/slides/_rels", "ppt/media", "ppt/slideMasters/_rels", "ppt/slideLayouts/_rels", "ppt/theme"] {
             std::fs::create_dir_all(crate::xml::part_path(root, folder)).or_else(|e| fail(e.to_string()))?;
         }
-        Ok(SimpleDeck { root: root.to_path_buf(), width, height, count: 0, image_pages: Default::default(), extensions: ["png".to_string()].into() })
+        Ok(SimpleDeck { root: root.to_path_buf(), width, height, count: 0, image_pages: Default::default(), extensions: ["png".to_string()].into(), background: None })
     }
     fn put(&self, name: &str, text: &str) -> Result<()> {
         std::fs::write(crate::xml::part_path(&self.root, name), text).or_else(|e| fail(format!("Cannot write {name}: {e}")))
@@ -350,7 +352,7 @@ impl SimpleDeck {
     pub fn add_with(&mut self, body: &str, black: bool, extra: &[(String, &str, String)], transition: &str) -> Result<()> {
         self.count += 1;
         let n = self.count;
-        self.put(&format!("ppt/slides/slide{n}.xml"), &format!("<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\" xmlns:r=\"{R_NS}\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>{GROUP}{body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>{transition}</p:sld>", if black { "000000" } else { "FFFFFF" }))?;
+        self.put(&format!("ppt/slides/slide{n}.xml"), &format!("<p:sld xmlns:p=\"{P_NS}\" xmlns:a=\"{A_NS}\" xmlns:r=\"{R_NS}\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"{}\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>{GROUP}{body}</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>{transition}</p:sld>", self.background.clone().unwrap_or_else(|| if black { "000000" } else { "FFFFFF" }.into())))?;
         let mut relations = vec![("layout", "slideLayout", "../slideLayouts/slideLayout1.xml".to_string())];
         relations.extend(extra.iter().map(|(id, kind, target)| (id.as_str(), *kind, target.clone())));
         if self.image_pages.contains(&n) {

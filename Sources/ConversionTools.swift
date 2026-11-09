@@ -235,6 +235,8 @@ final class SimpleDeck {
     var imagePages=Set<Int>()
     /// Picture formats in ppt/media, for [Content_Types].xml.
     var extensions:Set<String>=["png"]
+    /// Slide background colour (RRGGBB) replacing the black/white choice; nil keeps it.
+    var background:String?=nil
     init(root:URL,width:Double,height:Double) throws {
         self.root=root;self.width=width;self.height=height
         for folder in ["_rels","ppt/_rels","ppt/slides/_rels","ppt/media","ppt/slideMasters/_rels","ppt/slideLayouts/_rels","ppt/theme"] {try FileManager.default.createDirectory(at:root.appendingPathComponent(folder),withIntermediateDirectories:true)}
@@ -248,7 +250,7 @@ final class SimpleDeck {
     /// `relations` are extra (id, type, target) relationships; `transition` is a p:transition element or "".
     func add(body:String,black:Bool,relations extra:[(String,String,String)]=[],transition:String="") throws {
         count+=1
-        try put("ppt/slides/slide\(count).xml","<p:sld xmlns:p=\"\(pNS)\" xmlns:a=\"\(SlideScaler.drawingNS)\" xmlns:r=\"\(rNS)\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"\(black ? "000000":"FFFFFF")\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>\(group)\(body)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>\(transition)</p:sld>")
+        try put("ppt/slides/slide\(count).xml","<p:sld xmlns:p=\"\(pNS)\" xmlns:a=\"\(SlideScaler.drawingNS)\" xmlns:r=\"\(rNS)\"><p:cSld><p:bg><p:bgPr><a:solidFill><a:srgbClr val=\"\(background ?? (black ? "000000":"FFFFFF"))\"/></a:solidFill><a:effectLst/></p:bgPr></p:bg><p:spTree>\(group)\(body)</p:spTree></p:cSld><p:clrMapOvr><a:masterClrMapping/></p:clrMapOvr>\(transition)</p:sld>")
         var relations=[("layout","slideLayout","../slideLayouts/slideLayout1.xml")]+extra
         if imagePages.contains(count){relations.append(("image","image","../media/page\(count).png"))}
         try put("ppt/slides/_rels/slide\(count).xml.rels",rel(relations))

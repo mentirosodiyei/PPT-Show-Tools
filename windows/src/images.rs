@@ -227,7 +227,7 @@ fn format_seconds(v: f64) -> String {
     }
 }
 
-pub fn images_to_ppt(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, layout: ImageLayout, transition: &str, advance: Option<f64>) -> Result<ToolReport> {
+pub fn images_to_ppt(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, layout: ImageLayout, transition: &str, advance: Option<f64>, background: &str) -> Result<ToolReport> {
     let files = image_files(inputs);
     if files.is_empty() {
         return fail("No images found. Add JPEG, PNG, GIF, HEIC, WebP, AVIF, TIFF or BMP files, or a folder that contains them.");
@@ -240,6 +240,9 @@ pub fn images_to_ppt(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)
     }
     if output.exists() || files.iter().any(|f| crate::package::same_file(f, output)) || crate::reports::collides(output, &[".report.json", ".report.log"]) {
         return fail("The output or its report already exists. Choose a new name; the originals are not modified.");
+    }
+    if background.len() != 6 || !background.chars().all(|c| c.is_ascii_hexdigit()) {
+        return fail("The background colour must be six hexadecimal digits (RRGGBB), for example 1F3864.");
     }
     if !TRANSITIONS.contains(&transition) {
         return fail(format!("--transition must be one of: {}.", TRANSITIONS.join(", ")));
@@ -268,6 +271,9 @@ pub fn images_to_ppt(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)
     let staging = TempDir::new("PPTShowTools-Tools")?;
     let staged = staging.path().join("result.pptx");
     let mut deck = SimpleDeck::new(root.path(), width, height)?;
+    // One per slide stays on black; with several per slide the colour is the user's.
+    let colour = if layout == ImageLayout::One { "000000".to_string() } else { background.to_ascii_uppercase() };
+    deck.background = Some(colour.clone());
     let transition_element = transition_xml(transition, advance);
     let (mut pages, mut hashes, mut next) = (vec![], vec![], 0usize);
     for (slide, count) in plan.iter().enumerate() {
@@ -311,7 +317,7 @@ pub fn images_to_ppt(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)
             }
         }
     }
-    let mut limitations = vec!["Pictures are never cropped or stretched: each one fits whole in its space, centred, on a black background.".to_string(), "JPEG, PNG and GIF pictures are kept byte for byte; other formats, and photos stored sideways, are converted (JPEG, or PNG with transparency).".to_string()];
+    let mut limitations = vec![format!("Pictures are never cropped or stretched: each one fits whole in its space, centred, on {}", if colour == "000000" { "a black background.".to_string() } else { format!("the chosen background colour (#{colour}).") }), "JPEG, PNG and GIF pictures are kept byte for byte; other formats, and photos stored sideways, are converted (JPEG, or PNG with transparency).".to_string()];
     if !skipped.is_empty() {
         limitations.push(format!("Skipped (unreadable): {}.", skipped.join(", ")));
     }

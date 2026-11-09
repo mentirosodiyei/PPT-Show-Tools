@@ -70,7 +70,7 @@ struct PPTShowToolsApp: App {
 
     /// Same commands as the Windows build, used by the test suite.
     static func runCommandLine(_ all: [String]) -> Int32 {
-        var args: [String] = [], size: String?, layout = "one", transition = "none", advance: String?, i = 0
+        var args: [String] = [], size: String?, layout = "one", transition = "none", advance: String?, background = "000000", i = 0
         while i < all.count {
             // --fit-non169 is accepted for compatibility: every size is now adapted.
             if all[i] == "--fit-non169" { i += 1; continue }
@@ -78,6 +78,7 @@ struct PPTShowToolsApp: App {
             if all[i] == "--layout", i + 1 < all.count { layout = all[i + 1]; i += 2; continue }
             if all[i] == "--transition", i + 1 < all.count { transition = all[i + 1]; i += 2; continue }
             if all[i] == "--advance", i + 1 < all.count { advance = all[i + 1]; i += 2; continue }
+            if all[i] == "--background", i + 1 < all.count { background = all[i + 1].replacingOccurrences(of: "#", with: ""); i += 2; continue }
             args.append(all[i]); i += 1
         }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
@@ -108,7 +109,7 @@ struct PPTShowToolsApp: App {
                 if let advance { guard let value = Double(advance) else { try fail("--advance takes seconds, for example 5.") }; seconds = value }
                 let output = URL(fileURLWithPath: args[2])
                 do {
-                    try printJSON(try PresentationTools.imagesToPPT(inputs: paths(3), output: output, fixedSize: fixed, layout: chosenLayout, transition: chosenTransition, advance: seconds)); return 0
+                    try printJSON(try PresentationTools.imagesToPPT(inputs: paths(3), output: output, fixedSize: fixed, layout: chosenLayout, transition: chosenTransition, advance: seconds, background: background)); return 0
                 } catch {
                     let log = PresentationTools.logFailure(output: output, error: error)
                     fputs(error.localizedDescription + "\nLog: " + log + "\n", stderr); return 1
@@ -142,7 +143,7 @@ struct PPTShowToolsApp: App {
                    PPTShowTools --resize [--size WxH] output.pptx input.pptx
                    PPTShowTools --pdf-to-ppt output.pptx input.pdf
                    PPTShowTools --extract-notes output.pptx input.pptx
-                   PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] output.pptx image-or-folder […]
+                   PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition none|fade|push|wipe|split|cover|dissolve|zoom|random] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]
             """)
         } catch {
             fputs(error.localizedDescription + "\n", stderr); return 1

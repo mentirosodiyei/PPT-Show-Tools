@@ -99,6 +99,22 @@ class ImagesToPowerPoint(unittest.TestCase):
         out, _ = self.make('--advance', '2.5')
         self.assertEqual(slides(out)[0][1], '<p:transition advTm="2500"/>')
 
+    def background(self, out):
+        with zipfile.ZipFile(out) as z:
+            return {re.search(r'<p:bg><p:bgPr><a:solidFill><a:srgbClr val="([0-9A-F]{6})"/>', z.read(n).decode()).group(1)
+                    for n in z.namelist() if re.fullmatch(r'ppt/slides/slide\d+\.xml', n)}
+
+    def test_several_per_slide_use_the_chosen_background(self):
+        for layout in ['four', 'random']:
+            out, report = self.make('--layout', layout, '--background', '#1f3864')
+            self.assertEqual(self.background(out), {'1F3864'}, layout)
+            self.assertIn('the chosen background colour (#1F3864).', report['limitations'][0])
+        # One per slide stays on black.
+        out, _ = self.make('--background', '1F3864')
+        self.assertEqual(self.background(out), {'000000'})
+        r = run('--images-to-ppt', '--layout', 'four', '--background', 'blue', self.dir / 'bad.pptx', self.folder)
+        self.assertEqual(r.returncode, 1); self.assertIn('six hexadecimal digits', r.stderr)
+
     def test_bad_options_and_existing_output_are_refused(self):
         out = self.dir / 'out.pptx'
         for args in [('--layout', 'six'), ('--transition', 'spin'), ('--advance', '0')]:

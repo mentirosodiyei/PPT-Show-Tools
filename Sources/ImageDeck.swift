@@ -126,11 +126,12 @@ extension PresentationTools {
         return out
     }
 
-    static func imagesToPPT(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, layout: ImageLayout = .one, transition: SlideTransition = .none, advance: Double? = nil) throws -> ToolReport {
+    static func imagesToPPT(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil, layout: ImageLayout = .one, transition: SlideTransition = .none, advance: Double? = nil, background: String = "000000") throws -> ToolReport {
         let files = imageFiles(in: inputs)
         guard !files.isEmpty else { try fail("No images found. Add JPEG, PNG, GIF, HEIC, WebP, AVIF, TIFF or BMP files, or a folder that contains them.") }
         guard files.count <= maxImages else { try fail("There are \(files.count) images; at most \(maxImages) can go into one presentation.") }
         guard output.pathExtension.lowercased() == "pptx" else { try fail("The output must be PPTX.") }
+        guard background.count == 6, background.allSatisfy(\.isHexDigit) else { try fail("The background colour must be six hexadecimal digits (RRGGBB), for example 1F3864.") }
         guard !fm.fileExists(atPath: output.path), !files.contains(where: { $0.standardizedFileURL == output.standardizedFileURL }), !ReportStore.collides(output, [".report.json", ".report.log"]) else {
             try fail("The output or its report already exists. Choose a new name; the originals are not modified.")
         }
@@ -147,6 +148,9 @@ extension PresentationTools {
         let root = try temp(), staging = try temp(); defer { try? fm.removeItem(at: root); try? fm.removeItem(at: staging) }
         let staged = staging.appendingPathComponent("result.pptx")
         let builder = try SimpleDeck(root: root, width: width, height: height)
+        // One per slide stays on black; with several per slide the colour is the user's.
+        let colour = layout == .one ? "000000" : background.uppercased()
+        builder.background = colour
         let transitionXML = transition.xml(advance: advance)
         var pages: [ToolPage] = [], hashes: [String: String] = [:], next = 0
         for (slide, count) in plan.enumerated() {
@@ -177,7 +181,7 @@ extension PresentationTools {
         if !transitionXML.isEmpty {
             for slide in slides { guard list(try xml(check, slide).rootElement()!, "transition") != nil else { try fail("A transition is missing on \(slide).") } }
         }
-        var limitations = ["Pictures are never cropped or stretched: each one fits whole in its space, centred, on a black background.", "JPEG, PNG and GIF pictures are kept byte for byte; other formats, and photos stored sideways, are converted (JPEG, or PNG with transparency)."]
+        var limitations = ["Pictures are never cropped or stretched: each one fits whole in its space, centred, on " + (colour == "000000" ? "a black background." : "the chosen background colour (#\(colour))."), "JPEG, PNG and GIF pictures are kept byte for byte; other formats, and photos stored sideways, are converted (JPEG, or PNG with transparency)."]
         if !skipped.isEmpty { limitations.append("Skipped (unreadable): " + skipped.joined(separator: ", ") + ".") }
         let source = inputs.count == 1 ? inputs[0].path : "\(inputs.count) items"
         let r = ToolReport(operation: "Images → PowerPoint (\(layout.title.lowercased()), transition: \(transition.title.lowercased())\(advance.map { ", every \(String(format: "%g", $0)) s" } ?? ""))", source: source, output: output.path, pages: pages, checks: ["\(prepared.count) pictures on \(plan.count) slides, in order", "Pictures verified by SHA-256 after saving", transitionXML.isEmpty ? "No transition" : "Transition on every slide"], limitations: limitations)
