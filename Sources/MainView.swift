@@ -31,6 +31,7 @@ struct MainView: View {
     @State private var someSlides = false
     @State private var slidesText = ""
     @State private var function = DeckFunction.merge
+    @State private var dropTarget = false
     @State private var images: [URL] = []
     @State private var advanceText = "5"
     @State private var files: [URL] = []
@@ -92,6 +93,10 @@ struct MainView: View {
             if function != .merge && function != .images { Spacer(minLength: 0) }
         }
         .padding(24).frame(minWidth: 680, maxWidth: .infinity, minHeight: 520, maxHeight: .infinity, alignment: .topLeading)
+        // Files can be dropped anywhere on the window, on every function.
+        .contentShape(Rectangle())
+        .onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: dropped)
+        .overlay { if dropTarget { RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 3).padding(6).allowsHitTesting(false) } }
         .disabled(busy)
         .onChange(of: function) {
             source = nil; toolReport = nil
@@ -102,6 +107,44 @@ struct MainView: View {
         .sheet(isPresented: $showSettings) { SettingsSheet { showSettings = false } }
     }
 
+    // MARK: Dropped files
+
+    /// Keeps the dropped order even if file delivery is asynchronous.
+    private func dropped(_ providers: [NSItemProvider]) -> Bool {
+        Task { @MainActor in
+            var urls: [URL] = []
+            for provider in providers {
+                let data: Data? = await withCheckedContinuation { continuation in
+                    _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { d, _ in continuation.resume(returning: d) }
+                }
+                if let data, let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }
+            }
+            receive(urls)
+        }
+        return true
+    }
+
+    /// Dropped files go where the current function needs them.
+    private func receive(_ urls: [URL]) {
+        guard !busy, !urls.isEmpty else { return }
+        switch function {
+        case .merge:
+            let before = files.count
+            add(urls)
+            if files.count == before { status = "Only PowerPoint files (PPTX or PPTM) can be merged." }
+        case .images:
+            addImages(urls)
+        default:
+            let wanted = function == .pdf ? ["pdf"] : ["pptx", "pptm"]
+            if let url = urls.first(where: { wanted.contains($0.pathExtension.lowercased()) }) {
+                source = url; toolReport = nil
+                status = function == .media ? "Ready to extract." : "Ready to create a new copy."
+            } else {
+                status = function == .pdf ? "Drop a PDF file here." : "Drop a PowerPoint file (PPTX or PPTM) here."
+            }
+        }
+    }
+
     // MARK: Merge
 
     private var mergeContent: some View {
@@ -110,20 +153,7 @@ struct MainView: View {
                 ForEach(Array(files.enumerated()), id: \.element) { i, file in
                     Text("\(i + 1). \(file.lastPathComponent)").tag(file)
                 }
-            }.onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
-                // Keep the dropped order even if file delivery is asynchronous.
-                Task { @MainActor in
-                    var urls: [URL] = []
-                    for provider in providers {
-                        let data: Data? = await withCheckedContinuation { continuation in
-                            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { d, _ in continuation.resume(returning: d) }
-                        }
-                        if let data, let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }
-                    }
-                    add(urls)
-                }
-                return true
-            }
+            }.onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: dropped)
             HStack {
                 Button("Add…") {
                     let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.allowedContentTypes = presentationTypes
@@ -193,19 +223,7 @@ struct MainView: View {
                 ForEach(Array(images.enumerated()), id: \.element) { i, file in
                     Text("\(i + 1). \(file.lastPathComponent)").tag(file)
                 }
-            }.onDrop(of: [UTType.fileURL], isTargeted: nil) { providers in
-                Task { @MainActor in
-                    var urls: [URL] = []
-                    for provider in providers {
-                        let data: Data? = await withCheckedContinuation { continuation in
-                            _ = provider.loadDataRepresentation(forTypeIdentifier: UTType.fileURL.identifier) { d, _ in continuation.resume(returning: d) }
-                        }
-                        if let data, let url = URL(dataRepresentation: data, relativeTo: nil) { urls.append(url) }
-                    }
-                    addImages(urls)
-                }
-                return true
-            }
+            }.onDrop(of: [UTType.fileURL], isTargeted: $dropTarget, perform: dropped)
             HStack(spacing: 16) {
                 Picker("Layout", selection: $imageLayout) {
                     ForEach(ImageLayout.allCases) { Text($0.title).tag($0.rawValue) }

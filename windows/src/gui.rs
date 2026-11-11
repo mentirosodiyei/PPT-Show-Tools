@@ -393,6 +393,31 @@ impl App {
         }
     }
 
+    /// Dropped files go where the current function needs them (anywhere on the window).
+    fn receive(&mut self, urls: Vec<PathBuf>) {
+        match self.function {
+            Function::Merge => {
+                let before = self.files.len();
+                self.add(urls);
+                if self.files.len() == before {
+                    self.status = "Only PowerPoint files (PPTX or PPTM) can be merged.".into();
+                }
+            }
+            Function::Images => self.add_images(urls),
+            f => {
+                let wanted: &[&str] = if f == Function::Pdf { &["pdf"] } else { &["pptx", "pptm"] };
+                match urls.into_iter().find(|u| wanted.contains(&extension(u).as_str())) {
+                    Some(url) => {
+                        self.source = Some(url);
+                        self.tool_report = None;
+                        self.status = if f == Function::Media { "Ready to extract.".into() } else { "Ready to create a new copy.".into() };
+                    }
+                    None => self.status = if f == Function::Pdf { "Drop a PDF file here.".into() } else { "Drop a PowerPoint file (PPTX or PPTM) here.".into() },
+                }
+            }
+        }
+    }
+
     /// Folders are expanded into their pictures right away, so the list shows the real order.
     fn add_images(&mut self, urls: Vec<PathBuf>) {
         for url in crate::images::image_files(&urls) {
@@ -1103,6 +1128,12 @@ impl App {
             self.images = self.files.clone();
             self.selected = std::env::var("PPTSHOWTOOLS_SNAP_SEL").ok().and_then(|s| s.parse().ok());
         }
+        // Simulated drop, one '|'-separated batch after another (';').
+        if let Ok(batches) = std::env::var("PPTSHOWTOOLS_SNAP_DROP") {
+            for batch in batches.split(';') {
+                self.receive(batch.split('|').map(PathBuf::from).collect());
+            }
+        }
         if let Ok(layout) = std::env::var("PPTSHOWTOOLS_SNAP_LAYOUT") {
             self.settings.image_layout = layout;
             self.settings.image_background = "1F3864".into();
@@ -1153,14 +1184,7 @@ impl eframe::App for App {
         let modal = self.alert.is_some() || self.show_checks || self.show_settings;
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && !self.busy && !modal {
-            if self.function == Function::Merge {
-                self.add(dropped);
-            } else if self.function == Function::Images {
-                self.add_images(dropped);
-            } else if let Some(f) = dropped.into_iter().next() {
-                self.source = Some(f);
-                self.tool_report = None;
-            }
+            self.receive(dropped);
         }
         let page = egui::Frame::NONE.fill(p.bg).inner_margin(egui::Margin { left: 24, right: 24, top: 24, bottom: 24 });
         let enabled = !self.busy && !modal;
@@ -1192,6 +1216,11 @@ impl eframe::App for App {
             self.settings_sheet(ctx, &p);
         }
         self.alert_window(ctx, &p);
+        // Blue outline while files are dragged over the window, as on the Mac.
+        if ctx.input(|i| !i.raw.hovered_files.is_empty()) && !self.busy && !modal {
+            let screen = ctx.screen_rect().shrink(6.0);
+            ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-outline"))).rect_stroke(screen, CornerRadius::same(10), Stroke::new(3.0_f32, p.accent), egui::StrokeKind::Inside);
+        }
         self.snapshot_step(ctx);
     }
 }
