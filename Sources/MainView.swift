@@ -513,11 +513,12 @@ struct SettingsSheet: View {
             }
             Text("Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation keeps its design at the chosen size: the content is scaled as a whole, without stretching or cropping, and centred; only the background extends into the new margins (photos with their own colours, videos with a blurred copy). Pixels are measured as in PowerPoint, at 96 per inch.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            HStack {
-                Text("PPT Show Tools \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools")
-                    .font(.caption).foregroundStyle(.secondary).textSelection(.enabled)
-                Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction)
+            HStack(spacing: 4) {
+                Text("PPT Show Tools \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · David Redondo García ·")
+                    .font(.caption).foregroundStyle(.secondary)
+                Link("github.com/mentirosodiyei/PPT-Show-Tools", destination: URL(string: "https://github.com/mentirosodiyei/PPT-Show-Tools")!).font(.caption)
             }
+            HStack { Spacer(); Button("Done", action: close).keyboardShortcut(.defaultAction) }
         }.padding(24).frame(width: 480)
     }
 }

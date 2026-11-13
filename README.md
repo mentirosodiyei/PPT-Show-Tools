@@ -4,7 +4,7 @@ PPT Show Tools is a desktop app for macOS and Windows that works on PowerPoint f
 
 Up to version 0.8.0 the app was called **Deckwright**. PPT Show Tools brings over its slide-size setting; the Windows installer also removes the old Deckwright installation.
 
-Author: David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools
+Author: David Redondo García · https://github.com/mentirosodiyei/PPT-Show-Tools
 
 ## Functions
 
@@ -99,4 +99,4 @@ cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fi
 
 ## Status
 
-The Windows build has not yet been tested on a real Windows PC. The history of the project, from PPT Merger 0.2 to 0.6, is in [docs/HISTORY.ca.md](docs/HISTORY.ca.md) (Catalan).
+Both apps have been tried on real Macs and PCs. Still to be checked on Windows: the Windows-only security changes, the blurred video copies (FFmpeg's Windows encoder) and HEIC/AVIF pictures. Still to be checked in PowerPoint: resized backgrounds and the playback of video backgrounds. The apps are not signed or notarised, so macOS and Windows show a warning the first time.

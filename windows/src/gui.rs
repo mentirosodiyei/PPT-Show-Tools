@@ -1057,14 +1057,16 @@ impl App {
                 label(ui, "Each side must be between 96 and 5376 px.", regular(BODY), p.red);
             }
             label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation keeps its design at the chosen size: the content is scaled as a whole, without stretching or cropping, and centred; only the background extends into the new margins (photos with their own colours, videos with a blurred copy). Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.label(RichText::new(format!("PPT Show Tools {} · David Redondo García ·", env!("CARGO_PKG_VERSION"))).font(regular(10.0)).color(p.secondary));
+                ui.hyperlink_to(RichText::new("github.com/mentirosodiyei/PPT-Show-Tools").font(regular(10.0)).color(p.accent), "https://github.com/mentirosodiyei/PPT-Show-Tools");
+            });
             ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 let enter = ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
                 if mac_button(ui, p, "Done", ButtonKind::Default, true).clicked() || enter {
                     done = true;
                 }
-                ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                    ui.label(RichText::new(format!("PPT Show Tools {} · David Redondo García · github.com/mentirosodiyei/PPT-Show-Tools", env!("CARGO_PKG_VERSION"))).font(regular(10.0)).color(p.secondary));
-                });
             });
         });
         if settings != self.settings {
