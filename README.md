@@ -2,9 +2,7 @@
 
 PPT Show Tools is a desktop app for macOS and Windows that works on PowerPoint files without opening PowerPoint. Every operation creates a new file, never changes the original, and checks the result against the source before reporting success.
 
-Up to version 0.8.0 the app was called **Deckwright**. PPT Show Tools brings over its slide-size setting; the Windows installer also removes the old Deckwright installation.
-
-Author: David Redondo García · https://github.com/mentirosodiyei/PPT-Show-Tools
+Author: David Redondo García & Claude.
 
 ## Functions
 
