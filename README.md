@@ -4,6 +4,36 @@ PPT Show Tools is a desktop app for macOS and Windows that works on PowerPoint f
 
 Author: David Redondo García & Claude.
 
+## Download
+
+Get the latest version from **[Releases](https://github.com/mentirosodiyei/PPT-Show-Tools/releases)**:
+
+| System | File |
+|---|---|
+| Mac with Apple Silicon (M1 and later), macOS 14 or later | `PPTShowTools-<version>-AppleSilicon.dmg` |
+| Mac with Intel, macOS 14 to 26 | `PPTShowTools-<version>-Intel.dmg` |
+| Windows 10/11, 64-bit | `PPTShowTools-Setup-<version>.exe` (installer) or `…-Windows-portable.zip` (no installation) |
+
+- **macOS:** open the DMG and drag PPT Show Tools to Applications. The app is not notarised, so the first time, right-click it and choose **Open**.
+- **Windows:** the installer is not signed. If SmartScreen warns, click **More info → Run anyway**. It installs for your user only and needs no administrator rights.
+
+Not sure which Mac you have? Apple menu → About This Mac: "Chip: Apple M…" is Apple Silicon, "Processor: Intel" is Intel.
+
+## Screenshots
+
+The macOS and Windows apps look and work the same; these are from the Windows version.
+
+<p align="center">
+  <a href="docs/screenshots/merge.png"><img src="docs/screenshots/merge.png" width="420" alt="Merge: the presentations to combine, in order"></a>
+  <a href="docs/screenshots/images.png"><img src="docs/screenshots/images.png" width="420" alt="Images to PowerPoint: pictures, layout, transition and background colour"></a>
+</p>
+<p align="center">
+  <a href="docs/screenshots/media.png"><img src="docs/screenshots/media.png" width="420" alt="Extract media: which kinds and which slides"></a>
+  <a href="docs/screenshots/settings.png"><img src="docs/screenshots/settings.png" width="420" alt="Settings: the slide size used by every function"></a>
+</p>
+
+*Merge · Images to PowerPoint · Extract media · Settings*
+
 ## Functions
 
 Everything is on one screen: choose a **Function** and follow the controls below it.
