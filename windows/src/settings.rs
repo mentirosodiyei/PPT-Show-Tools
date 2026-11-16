@@ -60,10 +60,13 @@ pub struct Settings {
     pub media_images: bool,
     pub media_audio: bool,
     pub media_video: bool,
+    /// Updates: automatic checks, and a version the user chose to skip.
+    pub check_updates: bool,
+    pub skipped_version: String,
 }
 impl Default for Settings {
     fn default() -> Settings {
-        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0, image_background: "000000".into(), media_images: true, media_audio: true, media_video: true }
+        Settings { slide_size: SizeChoice::Automatic, custom_width: 1920, custom_height: 1080, image_layout: "one".into(), image_transition: "fade".into(), image_advance: 0, image_background: "000000".into(), media_images: true, media_audio: true, media_video: true, check_updates: true, skipped_version: String::new() }
     }
 }
 

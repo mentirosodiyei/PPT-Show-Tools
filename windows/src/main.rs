@@ -15,6 +15,7 @@ mod scaler;
 mod settings;
 mod textfit;
 mod tools;
+mod updater;
 mod verifier;
 mod video;
 mod xml;
@@ -118,6 +119,23 @@ fn run_cli(all: &[String]) -> i32 {
                 let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]))?;
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
+            }
+            "--check-update" if args.len() == 2 => {
+                let release = updater::latest()?;
+                let latest = release.as_ref().map(|r| r.version_text()).unwrap_or_else(updater::current_version);
+                let asset = release.as_ref().map(updater::asset_name).unwrap_or_default();
+                println!("{}", serde_json::json!({"current": updater::current_version(), "latest": latest, "newer": release.is_some(), "asset": asset}));
+                Ok(0)
+            }
+            "--download-update" if args.len() == 2 => {
+                let Some(release) = updater::latest()? else { return fail("There is no newer version.") };
+                println!("{}", updater::download(&release, &|_| {})?.display());
+                Ok(0)
+            }
+            "--install-update" if args.len() == 4 => {
+                updater::install_portable(&PathBuf::from(args[2]), &PathBuf::from(args[3]))?;
+                println!("Installed");
+                Ok(0)
             }
             "--extract-media" if args.len() == 4 => {
                 let mut chosen = vec![];

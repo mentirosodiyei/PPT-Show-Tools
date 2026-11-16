@@ -44,6 +44,7 @@ struct PPTShowToolsApp: App {
         Self.forgetBrokenWindowFrames()
         Self.importDeckwrightSettings()
         DispatchQueue.global(qos: .utility).async { ReportStore.prepare() }  // deletes logs older than 30 days
+        Updater.cleanUp()  // the previous version, moved aside by an update
     }
 
     /// This app was called Deckwright up to 0.8.0: bring over its slide size once.
@@ -104,6 +105,15 @@ struct PPTShowToolsApp: App {
             case "--verify" where args.count >= 5:
                 let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
+            case "--check-update" where args.count == 2:
+                let release = try Updater.latest()
+                print(String(data: try JSONSerialization.data(withJSONObject: ["current": Updater.currentVersion, "latest": release?.versionText ?? Updater.currentVersion, "newer": release != nil, "asset": release.map(Updater.assetName) ?? ""], options: [.sortedKeys]), encoding: .utf8)!)
+                return 0
+            case "--download-update" where args.count == 2:
+                guard let release = try Updater.latest() else { try fail("There is no newer version.") }
+                print(try Updater.download(release).path); return 0
+            case "--install-update" where args.count == 5:
+                try Updater.install(dmg: URL(fileURLWithPath: args[2]), over: URL(fileURLWithPath: args[3]), expectedVersion: args[4]); print("Installed"); return 0
             case "--extract-media" where args.count == 4:
                 var chosen = Set<MediaKind>()
                 for k in kinds.lowercased().split(separator: ",") {

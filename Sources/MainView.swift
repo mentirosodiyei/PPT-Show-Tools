@@ -32,6 +32,11 @@ struct MainView: View {
     @State private var slidesText = ""
     @State private var function = DeckFunction.merge
     @State private var dropTarget = false
+    @AppStorage("checkUpdates") private var checkUpdates = true
+    @AppStorage("skippedVersion") private var skippedVersion = ""
+    @State private var pendingUpdate: Updater.Release?
+    @State private var showUpdate = false
+    @State private var updateTimer: Timer?
     @State private var images: [URL] = []
     @State private var advanceText = "5"
     @State private var files: [URL] = []
@@ -104,7 +109,64 @@ struct MainView: View {
         }
         .background(WindowFitter())
         .sheet(isPresented: $showChecks) { ChecksSheet(validation: validation) { showChecks = false } }
-        .sheet(isPresented: $showSettings) { SettingsSheet { showSettings = false } }
+        .sheet(isPresented: $showSettings) { SettingsSheet(close: { showSettings = false }, checkNow: { showSettings = false; checkForUpdates(manual: true) }) }
+        .sheet(isPresented: $showUpdate) {
+            if let pendingUpdate {
+                UpdateSheet(release: pendingUpdate, install: { showUpdate = false; installUpdate(pendingUpdate) },
+                            later: { showUpdate = false }, skip: { skippedVersion = pendingUpdate.versionText; showUpdate = false })
+            }
+        }
+        .onAppear {
+            // First check a few seconds after start-up, then every 12 hours.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 5) { checkForUpdates(manual: false) }
+            updateTimer = Timer.scheduledTimer(withTimeInterval: Updater.checkInterval, repeats: true) { _ in Task { @MainActor in checkForUpdates(manual: false) } }
+        }
+    }
+
+    // MARK: Updates
+
+    /// Automatic checks are silent when nothing is new or GitHub cannot be reached.
+    private func checkForUpdates(manual: Bool) {
+        guard manual || (checkUpdates && !busy && !showUpdate) else { return }
+        if manual { status = "Checking for updates…" }
+        DispatchQueue.global(qos: .utility).async {
+            do {
+                let release = try Updater.latest()
+                DispatchQueue.main.async {
+                    guard let release else { if manual { status = "PPT Show Tools \(Updater.currentVersion) is the latest version." }; return }
+                    if manual || release.versionText != skippedVersion {
+                        pendingUpdate = release; showUpdate = true
+                        if manual { status = "PPT Show Tools \(release.versionText) is available." }
+                    }
+                }
+            } catch {
+                if manual { DispatchQueue.main.async { status = "Could not check for updates: " + error.localizedDescription } }
+            }
+        }
+    }
+
+    private func installUpdate(_ release: Updater.Release) {
+        busy = true; status = "Preparing the update…"
+        let app = Bundle.main.bundleURL
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let dmg = try Updater.download(release) { message in DispatchQueue.main.async { status = message } }
+                DispatchQueue.main.async { status = "Installing PPT Show Tools \(release.versionText)…" }
+                try Updater.install(dmg: dmg, over: app, expectedVersion: release.versionText)
+                try? FileManager.default.removeItem(at: dmg.deletingLastPathComponent())
+                DispatchQueue.main.async {
+                    // Open the new version, then quit this one.
+                    let configuration = NSWorkspace.OpenConfiguration(); configuration.createsNewApplicationInstance = true
+                    NSWorkspace.shared.openApplication(at: app, configuration: configuration) { _, _ in DispatchQueue.main.async { NSApp.terminate(nil) } }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    busy = false
+                    status = "The update was not installed: " + error.localizedDescription + " You can download it from GitHub."
+                    NSWorkspace.shared.open(release.page)
+                }
+            }
+        }
     }
 
     // MARK: Dropped files
@@ -474,13 +536,35 @@ struct ChecksSheet: View {
     }
 }
 
+/// A newer version: what is new, and the user's choice.
+struct UpdateSheet: View {
+    let release: Updater.Release
+    let install: () -> Void, later: () -> Void, skip: () -> Void
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("PPT Show Tools \(release.versionText) is available").font(.title2.bold())
+            Text("You have version \(Updater.currentVersion). The update is downloaded from GitHub, its signature and checksum are checked, and the app restarts.").foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            ScrollView { Text(Updater.plainNotes(release.notes)).font(.callout).frame(maxWidth: .infinity, alignment: .leading).textSelection(.enabled) }
+                .frame(height: 260).padding(8).background(Color(nsColor: .textBackgroundColor)).clipShape(RoundedRectangle(cornerRadius: 6))
+            HStack {
+                Button("Skip this version", action: skip)
+                Spacer()
+                Button("Not now", action: later).keyboardShortcut(.cancelAction)
+                Button("Install", action: install).keyboardShortcut(.defaultAction)
+            }
+        }.padding(24).frame(width: 560)
+    }
+}
+
 struct SettingsSheet: View {
     @AppStorage("slideSize") private var sizeChoice = SlideSizeChoice.automatic.rawValue
+    @AppStorage("checkUpdates") private var checkUpdates = true
     @AppStorage("customWidth") private var customWidth = 1920
     @AppStorage("customHeight") private var customHeight = 1080
     @State private var widthText = ""
     @State private var heightText = ""
     let close: () -> Void
+    var checkNow: () -> Void = {}
     /// Applied as it is typed (not only on Return), and typing selects Custom.
     private func pixelField(_ title: String, value: Binding<Int>, text: Binding<String>) -> some View {
         TextField(title, text: text).frame(width: 80)
@@ -513,6 +597,12 @@ struct SettingsSheet: View {
             }
             Text("Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation keeps its design at the chosen size: the content is scaled as a whole, without stretching or cropping, and centred; only the background extends into the new margins (photos with their own colours, videos with a blurred copy). Pixels are measured as in PowerPoint, at 96 per inch.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Text("Updates").font(.headline)
+            HStack {
+                Toggle("Check for updates automatically", isOn: $checkUpdates).toggleStyle(.checkbox)
+                Spacer()
+                Button("Check now", action: checkNow)
+            }
             HStack(spacing: 4) {
                 Text("PPT Show Tools \(Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "") · David Redondo García ·")
                     .font(.caption).foregroundStyle(.secondary)

@@ -3,7 +3,7 @@ Unicode true
 !include "MUI2.nsh"
 
 !ifndef VERSION
-  !define VERSION "0.9.0"
+  !define VERSION "0.10.0"
 !endif
 !ifndef EXE
   !define EXE "PPTShowTools.exe"
@@ -63,6 +63,9 @@ SectionEnd
 Section "PPT Show Tools" SecMain
   SectionIn RO
   SetShellVarContext current
+  ; An update started by the app runs silently: let the app finish closing first.
+  IfSilent 0 +2
+    Sleep 2000
   SetOutPath "$INSTDIR"
   File "/oname=PPTShowTools.exe" "${EXE}"
   File "/oname=PPTShowTools.ico" "..\assets\app.ico"
@@ -102,6 +105,12 @@ LangString DESC_Desktop ${LANG_ENGLISH} "Adds a PPT Show Tools icon to the deskt
   !insertmacro MUI_DESCRIPTION_TEXT ${SecMain} $(DESC_Main)
   !insertmacro MUI_DESCRIPTION_TEXT ${SecDesktop} $(DESC_Desktop)
 !insertmacro MUI_FUNCTION_DESCRIPTION_END
+
+; After a silent update, open the new version again.
+Function .onInstSuccess
+  IfSilent 0 +2
+    Exec '"$INSTDIR\PPTShowTools.exe"'
+FunctionEnd
 
 Section "Uninstall"
   SetShellVarContext current

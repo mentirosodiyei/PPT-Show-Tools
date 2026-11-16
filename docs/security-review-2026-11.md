@@ -60,6 +60,15 @@ The files a user opens (PPTX, PPTM, PDF) may come from anyone. Opening one must 
 - **Folders:** only the folder itself is read, not subfolders; hidden files are skipped; at most 2,000 pictures.
 - **Originals:** JPEG, PNG and GIF are copied byte for byte and checked by SHA-256 after saving; nothing is written next to the originals, and an existing output is never replaced.
 
+## Added after the review: updates
+
+- **What is installed:** an update is installed only if the release's `SHA256SUMS.txt` has a valid Ed25519 signature from the author's key, whose public half is built into both apps, and the download matches its checksum. A file replaced on GitHub, or by anyone in between, is refused, even with a valid TLS connection.
+- **Where it comes from:** downloads are HTTPS from GitHub only. Redirects are followed one by one and each new address is checked against the same list, with a size limit.
+- **macOS:** the disk image must contain PPT Show Tools with the expected bundle identifier and version. The running app is moved aside and replaced, without quarantine attributes (the update was already verified). The old copy is deleted at the next launch. An app still on its disk image, or translocated, is not replaced: the release page is opened instead.
+- **Windows:** the installed app runs the verified installer silently (per user, no administrator rights). The portable app takes only `PPTShowTools.exe`, `ffmpeg.exe` and the FFmpeg notices from the zip's `PPT Show Tools/` folder, so a crafted zip cannot write elsewhere.
+- **Tests:** the suite plays GitHub on 127.0.0.1 with a throw-away key. That test server and key are accepted only for 127.0.0.1.
+- **The private key** is the new crown jewel. It is outside the repository, readable only by its owner; if it leaked, someone with access to the GitHub account could push an update. Keep it backed up and private.
+
 ## Not covered by code
 
 - **Signing:**

@@ -280,6 +280,9 @@ enum Msg {
     Progress(String),
     Merged(Job, std::result::Result<(bool, usize, Vec<FileValidation>), Error>),
     Tool(std::result::Result<ToolReport, String>),
+    /// Result of an update check; `manual` when the user asked for it.
+    Update(bool, std::result::Result<Option<crate::updater::Release>, String>),
+    UpdateReady(std::result::Result<PathBuf, String>),
 }
 /// macOS NSAlert equivalent: title, text and buttons (first one is the default).
 #[derive(Clone)]
@@ -313,6 +316,9 @@ struct App {
     tx: Sender<Msg>,
     rx: Receiver<Msg>,
     snapshot: Option<(PathBuf, u32)>,
+    pending_update: Option<crate::updater::Release>,
+    show_update: bool,
+    auto_updates: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 const MERGE_HINT: &str = "Add the presentations in the order you want to merge them.";
@@ -349,7 +355,30 @@ impl App {
             tx,
             rx,
             snapshot: None,
+            pending_update: None,
+            show_update: false,
+            auto_updates: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(true)),
         };
+        app.auto_updates.store(app.settings.check_updates, std::sync::atomic::Ordering::Relaxed);
+        // The previous version, renamed aside by an update.
+        crate::updater::clean_up();
+        // First check a few seconds after start-up, then every 12 hours; nothing
+        // is sent to GitHub while automatic checks are off.
+        if std::env::var_os("PPTSHOWTOOLS_SNAPSHOT").is_none() {
+            let (tx, enabled) = (app.tx.clone(), app.auto_updates.clone());
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                loop {
+                    if enabled.load(std::sync::atomic::Ordering::Relaxed) {
+                        let result = crate::updater::latest().map_err(|e| e.to_string());
+                        if tx.send(Msg::Update(false, result)).is_err() {
+                            break;
+                        }
+                    }
+                    std::thread::sleep(crate::updater::CHECK_INTERVAL);
+                }
+            });
+        }
         app.snapshot_setup();
         app
     }
@@ -532,6 +561,44 @@ impl App {
             Msg::Merged(_, Err(Error::Fail(message))) => {
                 self.busy = false;
                 self.status = message;
+            }
+            Msg::Update(manual, result) => match result {
+                Ok(Some(release)) => {
+                    if manual || (release.version_text() != self.settings.skipped_version && !self.busy && !self.show_update) {
+                        if manual {
+                            self.status = format!("PPT Show Tools {} is available.", release.version_text());
+                        }
+                        self.pending_update = Some(release);
+                        self.show_update = true;
+                    }
+                }
+                Ok(None) if manual => self.status = format!("PPT Show Tools {} is the latest version.", crate::updater::current_version()),
+                Err(e) if manual => self.status = format!("Could not check for updates: {e}"),
+                _ => {}
+            },
+            Msg::UpdateReady(result) => {
+                let page = self.pending_update.as_ref().map(|r| r.page.clone()).unwrap_or_default();
+                let outcome = result.and_then(|file| {
+                    if crate::reports::installed() {
+                        // The installer replaces this copy and opens the new version.
+                        crate::updater::start_installer(&file).map_err(|e| e.to_string())
+                    } else {
+                        let exe = std::env::current_exe().map_err(|e| e.to_string())?;
+                        let folder = exe.parent().map(Path::to_path_buf).ok_or("No app folder.")?;
+                        crate::updater::install_portable(&file, &folder).map_err(|e| e.to_string())?;
+                        std::process::Command::new(&exe).spawn().map(|_| ()).map_err(|e| e.to_string())
+                    }
+                });
+                match outcome {
+                    Ok(()) => std::process::exit(0),
+                    Err(e) => {
+                        self.busy = false;
+                        self.status = format!("The update was not installed: {e} You can download it from GitHub.");
+                        if !page.is_empty() {
+                            open_url(&page);
+                        }
+                    }
+                }
             }
             Msg::Tool(result) => {
                 self.busy = false;
@@ -952,6 +1019,73 @@ impl App {
         }
     }
 
+    // ----- Updates -----
+
+    fn check_for_updates(&mut self, ctx: &egui::Context) {
+        self.status = "Checking for updates…".into();
+        let (tx, ctx) = (self.tx.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let _ = tx.send(Msg::Update(true, crate::updater::latest().map_err(|e| e.to_string())));
+            ctx.request_repaint();
+        });
+    }
+
+    fn install_update(&mut self, ctx: &egui::Context) {
+        let Some(release) = self.pending_update.clone() else { return };
+        self.busy = true;
+        self.status = "Preparing the update…".into();
+        let (tx, ctx) = (self.tx.clone(), ctx.clone());
+        std::thread::spawn(move || {
+            let progress_tx = tx.clone();
+            let progress_ctx = ctx.clone();
+            let result = crate::updater::download(&release, &move |m| {
+                let _ = progress_tx.send(Msg::Progress(m));
+                progress_ctx.request_repaint();
+            });
+            let _ = tx.send(Msg::UpdateReady(result.map_err(|e| e.to_string())));
+            ctx.request_repaint();
+        });
+    }
+
+    fn update_sheet(&mut self, ctx: &egui::Context, p: &Palette) {
+        let Some(release) = self.pending_update.clone() else { return };
+        let (mut install, mut later, mut skip) = (false, false, false);
+        Self::sheet(ctx, p, "update", 560.0, None, |ui| {
+            ui.spacing_mut().item_spacing.y = 12.0;
+            label(ui, &format!("PPT Show Tools {} is available", release.version_text()), bold(22.0), p.text);
+            label(ui, &format!("You have version {}. The update is downloaded from GitHub, its signature and checksum are checked, and the app restarts.", crate::updater::current_version()), regular(BODY), p.secondary);
+            egui::Frame::NONE.fill(p.field).stroke(Stroke::new(1.0_f32, p.field_stroke)).corner_radius(CornerRadius::same(6)).inner_margin(8.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().max_height(260.0).auto_shrink([false, false]).show(ui, |ui| {
+                    label(ui, &crate::updater::plain_notes(&release.notes), regular(CALLOUT), p.text);
+                });
+            });
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                if mac_button(ui, p, "Skip this version", ButtonKind::Normal, true).clicked() {
+                    skip = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    ui.spacing_mut().item_spacing.x = 8.0;
+                    if mac_button(ui, p, "Install", ButtonKind::Default, true).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                        install = true;
+                    }
+                    if mac_button(ui, p, "Not now", ButtonKind::Normal, true).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                        later = true;
+                    }
+                });
+            });
+        });
+        if skip {
+            self.settings.skipped_version = release.version_text();
+            self.settings.save();
+        }
+        if install || later || skip {
+            self.show_update = false;
+        }
+        if install {
+            self.install_update(ctx);
+        }
+    }
+
     // ----- Sheets and alerts -----
 
     fn backdrop(ctx: &egui::Context, id: &str) {
@@ -1022,6 +1156,7 @@ impl App {
         let mut settings = self.settings.clone();
         let (mut wt, mut ht) = (self.width_text.clone(), self.height_text.clone());
         let mut done = false;
+        let mut check_now = false;
         Self::sheet(ctx, p, "settings", 480.0, None, |ui| {
             ui.spacing_mut().item_spacing.y = 16.0;
             label(ui, "Settings", bold(22.0), p.text);
@@ -1057,6 +1192,15 @@ impl App {
                 label(ui, "Each side must be between 96 and 5376 px.", regular(BODY), p.red);
             }
             label(ui, "Automatic keeps the size every presentation shares (or their common proportion, at the largest size); with mixed proportions it uses 16:9. Typing a size selects Custom. Every presentation keeps its design at the chosen size: the content is scaled as a whole, without stretching or cropping, and centred; only the background extends into the new margins (photos with their own colours, videos with a blurred copy). Pixels are measured as in PowerPoint, at 96 per inch.", regular(10.0), p.secondary);
+            label(ui, "Updates", bold(BODY), p.text);
+            ui.allocate_ui_with_layout(vec2(ui.available_width(), 24.0), egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                checkbox(ui, p, &mut settings.check_updates, "Check for updates automatically");
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if mac_button(ui, p, "Check now", ButtonKind::Normal, true).clicked() {
+                        check_now = true;
+                    }
+                });
+            });
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 4.0;
                 ui.label(RichText::new(format!("PPT Show Tools {} · David Redondo García ·", env!("CARGO_PKG_VERSION"))).font(regular(10.0)).color(p.secondary));
@@ -1071,12 +1215,17 @@ impl App {
         });
         if settings != self.settings {
             settings.save();
+            self.auto_updates.store(settings.check_updates, std::sync::atomic::Ordering::Relaxed);
             self.settings = settings;
         }
         self.width_text = wt;
         self.height_text = ht;
         if done {
             self.show_settings = false;
+        }
+        if check_now {
+            self.show_settings = false;
+            self.check_for_updates(ctx);
         }
     }
 
@@ -1140,6 +1289,10 @@ impl App {
             self.settings.image_layout = layout;
             self.settings.image_background = "1F3864".into();
         }
+        if let Ok(notes) = std::env::var("PPTSHOWTOOLS_SNAP_UPDATE") {
+            self.pending_update = Some(crate::updater::preview("0.10.1", &notes));
+            self.show_update = true;
+        }
         if std::env::var("PPTSHOWTOOLS_SNAP_SETTINGS").is_ok() {
             self.show_settings = true;
         }
@@ -1183,7 +1336,7 @@ impl eframe::App for App {
             }
         }
         let p = palette(ctx.theme() == egui::Theme::Dark);
-        let modal = self.alert.is_some() || self.show_checks || self.show_settings;
+        let modal = self.alert.is_some() || self.show_checks || self.show_settings || self.show_update;
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().filter_map(|f| f.path.clone()).collect());
         if !dropped.is_empty() && !self.busy && !modal {
             self.receive(dropped);
@@ -1217,6 +1370,9 @@ impl eframe::App for App {
         if self.show_settings {
             self.settings_sheet(ctx, &p);
         }
+        if self.show_update {
+            self.update_sheet(ctx, &p);
+        }
         self.alert_window(ctx, &p);
         // Blue outline while files are dragged over the window, as on the Mac.
         if ctx.input(|i| !i.raw.hovered_files.is_empty()) && !self.busy && !modal {
@@ -1224,6 +1380,21 @@ impl eframe::App for App {
             ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop-outline"))).rect_stroke(screen, CornerRadius::same(10), Stroke::new(3.0_f32, p.accent), egui::StrokeKind::Inside);
         }
         self.snapshot_step(ctx);
+    }
+}
+
+/// Opens a web page in the default browser.
+fn open_url(url: &str) {
+    if !url.starts_with("https://") {
+        return;
+    }
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new(crate::windows_program("explorer.exe")).arg(url).spawn();
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let _ = std::process::Command::new("open").arg(url).spawn();
     }
 }
 

@@ -63,6 +63,28 @@ When a merge combines presentations of different sizes, each one is resized to t
 
 Pixels are measured as in PowerPoint, at 96 per inch (1 px = 9525 EMU). PowerPoint allows 96–5376 px per side. On macOS the setting is stored in the app's preferences; on Windows in `%APPDATA%\PPT Show Tools\settings.json` (the portable version keeps it only while it is open).
 
+## Updates
+
+The app checks GitHub for a newer version a few seconds after it starts and then every 12 hours. When there is one, it shows what is new and lets you choose:
+
+- **Install:** the update is downloaded, checked and installed, and the app opens again.
+  - On macOS it replaces itself in its folder (usually Applications).
+  - The installed Windows app runs the new installer silently.
+  - The portable Windows app replaces its files in its own folder.
+- **Not now:** the app asks again at the next check.
+- **Skip this version:** the app doesn't ask about this version again.
+
+Settings has **Check for updates automatically** (on by default) and **Check now**. While automatic checks are off, the app sends nothing to GitHub.
+
+The only request is to GitHub's public release list. It carries the app's version (as the user agent) and, as with any web request, your IP address. Nothing else is sent.
+
+**Security:** an update is installed only if both checks pass:
+
+- the release's `SHA256SUMS.txt` carries a valid Ed25519 signature from the author's release key;
+- the download matches its SHA-256 checksum.
+
+A file replaced on GitHub, or along the way, is refused; on macOS, so is a disk image that doesn't contain the expected version. Versions up to 0.9.0 have no updater: install 0.10.0 by hand once.
+
 ## Checks and reports
 
 Nothing is written next to the files you convert. Reports and error logs go to a logs folder and are deleted after 30 days:
@@ -101,6 +123,16 @@ windows/build-windows.sh   # → dist/windows/PPTShowTools-Setup-<version>.exe a
 
 Build caches live in `~/Library/Caches/PPTShowTools-*`, outside synced folders.
 
+**Publishing a release** (the updater only installs signed releases):
+
+```sh
+./build.sh && windows/build-windows.sh
+tools/make-release.sh                      # → dist/release-<version>/: both DMGs, both Windows files, SHA256SUMS.txt and SHA256SUMS.txt.sig
+gh release create v<version> dist/release-<version>/*
+```
+
+The signing key is created once with `swift tools/release-sign.swift keygen`. It lives in `~/Library/Application Support/PPT Show Tools Release/`, readable only by its owner and never in this repository. Keep a backup of it: without it, new versions cannot be installed by the updater, only by hand.
+
 ## Command line
 
 Both builds accept the same commands (used by the test suite):
@@ -111,6 +143,8 @@ PPTShowTools --merge-powerpoint [--size WxH] output.pptx input1.pptx input2.pptx
 PPTShowTools --resize [--size WxH] output.pptx input.pptx
 PPTShowTools --pdf-to-ppt [--size WxH] output.pptx input.pdf
 PPTShowTools --extract-notes output.pptx input.pptx
+PPTShowTools --check-update                       # JSON: current and latest version
+PPTShowTools --download-update                    # downloads and checks the newer version, prints its path
 PPTShowTools --extract-media [--kinds images,audio,video] [--slides all|1-3,5] destination-folder input.pptx
 PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transition NAME] [--advance SECONDS] [--background RRGGBB] output.pptx image-or-folder […]
 ```
@@ -120,7 +154,7 @@ PPTShowTools --images-to-ppt [--size WxH] [--layout one|four|random] [--transiti
 ## Tests
 
 ```sh
-cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize test_images test_media
+cd tests && python3 -m unittest test_guards test_conversion_tools test_scaler_fit test_office_text test_native_checkpoint test_work_kit_audit test_hardening test_slide_size test_audit_fixes test_adaptive_resize test_reports test_security test_video_resize test_images test_media test_updater
 ```
 
 `PPTSHOWTOOLS_BIN=<path>` runs the same suite against another build, such as the Windows engine compiled for macOS. On macOS all 51 tests pass. The Windows engine passes all except the two PDF tests, which need the Windows PDF renderer. `cargo test` in `windows/` runs the Rust unit tests.
