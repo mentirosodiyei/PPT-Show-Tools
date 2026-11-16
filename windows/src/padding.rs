@@ -12,6 +12,26 @@ use std::path::Path;
 const IMAGE_REL: &str = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image";
 /// Canvas limit: big enough for 8K walls, small enough for memory.
 const MAX_PIXELS: f64 = 36_000_000.0;
+/// Pictures larger than this are not decoded at all (the decoder's 512 MB
+/// allocation cap would refuse them as RGBA anyway).
+pub const MAX_SOURCE_PIXELS: f64 = 128_000_000.0;
+
+/// The picture, reduced to at most `MAX_PIXELS` before any RGBA buffer is
+/// made; None when it is larger than `MAX_SOURCE_PIXELS`. Same as boundedImage on macOS.
+fn bounded_image(data: &[u8]) -> Option<image::RgbaImage> {
+    let (w, h) = image::ImageReader::new(std::io::Cursor::new(data)).with_guessed_format().ok()?.into_dimensions().ok()?;
+    let area = w as f64 * h as f64;
+    if w == 0 || h == 0 || area > MAX_SOURCE_PIXELS {
+        return None;
+    }
+    let img = image::load_from_memory(data).ok()?;
+    if area <= MAX_PIXELS {
+        return Some(img.to_rgba8());
+    }
+    let f = (MAX_PIXELS / area).sqrt();
+    let (nw, nh) = (((w as f64 * f) as u32).max(1), ((h as f64 * f) as u32).max(1));
+    Some(img.resize_exact(nw, nh, image::imageops::FilterType::Triangle).to_rgba8())
+}
 
 /// State shared by every part of one package.
 #[derive(Default)]
@@ -230,7 +250,7 @@ fn edge_colours(img: &image::RgbaImage, horizontal: bool, far: bool, strip_div: 
 
 /// The padded image, encoded as JPEG (photos) or PNG.
 fn padded(data: &[u8], jpeg: bool, sides: [f64; 4]) -> Option<Vec<u8>> {
-    let source = image::load_from_memory(data).ok()?.to_rgba8();
+    let source = bounded_image(data)?;
     let (w, h) = source.dimensions();
     let (cw, ch, iw, ih, ox, oy) = canvas(w, h, sides);
     let horizontal = cw > iw;

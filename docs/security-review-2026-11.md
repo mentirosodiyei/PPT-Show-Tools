@@ -69,6 +69,26 @@ The files a user opens (PPTX, PPTM, PDF) may come from anyone. Opening one must 
 - **Tests:** the suite plays GitHub on 127.0.0.1 with a throw-away key. That test server and key are accepted only for 127.0.0.1.
 - **The private key** is the new crown jewel. It is outside the repository, readable only by its owner; if it leaked, someone with access to the GitHub account could push an update. Keep it backed up and private.
 
+## Second audit (external, November 2026)
+
+An external audit of 0.9.0 reported 13 findings. Each one was checked in the code and fixed on both engines. Regression tests are in `tests/test_audit_2026_11b.py`.
+
+| # | Severity | Platform | Finding | Fix |
+|---|---|---|---|---|
+| 1 | High | macOS | The ZIP names were checked with `zipinfo`, which reads only the central directory and rewrites control characters and accents, while `ditto` extracts from the local headers. A renamed or hidden local entry could get past the checks. `ditto` also treated `__MACOSX/._*` entries as resource forks. | The app reads the central directory itself and requires every local header to match its entry, in one unbroken run. Names with control characters are refused. After extraction, the files on disk must be exactly the checked ones. `ditto` runs with `--norsrc --noextattr`. |
+| 2 | Medium | Both | When merging, an imported package's relationship could reach the first presentation's parts: an absolute target with `..`, or a relative one climbing above its root (for example from a theme). The verifier only looked at slide, layout, master and notes relationships. | Targets are resolved inside their own package. Absolute targets, and relative ones that would climb out, are rewritten under `pptMerger/sourceN/`. The verifier checks every relationship part. |
+| 3 | Medium | Both | The 30-day cleanup deleted any old file in `PPTSHOWTOOLS_LOG_DIR`. | Only the app's own reports and error logs are deleted. |
+| 4 | Medium | Both | Very large pictures were decoded into full-size RGBA buffers. HEIC/AVIF went through FFmpeg with no time limit, no protocol limit and output held in memory. | Pictures over 36 million pixels are reduced before padding; over 128 million they are not decoded. Transparency is checked in strips. FFmpeg gets an absolute path, `-protocol_whitelist file`, a time limit and a temporary output of bounded size. |
+| 5 | Low | Both | Macros were found only as `ppt/vbaProject.bin`. `customXml` from imported files was kept. | Macro parts are found by name, content type and relationship type, with their relationship parts. `customXml` is dropped from imported files. |
+| 6 | Low | macOS | `resolvePart` used `standardizingPath`, which consults the Mac's own folders (`/var`, `/tmp`); an invalid `%` kept the `#fragment`. | Normalization works on the text alone, as on Windows; the fragment is always dropped. |
+| 7 | Bug | Both | A failed blurred copy left an unreferenced `.mp4`, which could break the content-type check. | The file is deleted; the still is used. |
+| 8 | Bug | Both | Resizing twice stacked blurred backgrounds; Extract media returned them. | Earlier backgrounds are removed and made again for their video; Extract media leaves them out. |
+| 9 | Bug | Both | `Override PartName` was compared with letter case and without `%XX` decoding. | Compared as OPC requires. |
+| 10 | Bug | Both | Notes with `&#13;` failed Extract notes' own check. | Carriage returns become line breaks. |
+| 11 | Bug | Both | Windows: PowerPoint's macro setting was not restored and "closed" was reported before closing. Both: a first file with macros gave a contradictory message with "Merge and save with PowerPoint…". | The setting is restored; the file is closed before reporting. The message now explains that this command cannot keep macros. |
+| 12 | Bug | Both | Animation formulas written `#ppt_x+0.1`, and motion paths such as `0.5-0.25`, were not scaled. | Both forms are scaled. |
+| 13 | Bug | Both | Function switch kept the Merge selection (macOS); a duplicate drop gave the wrong message; Images had no status on Windows; `--office-prepare` and `--verify` ignored `--size`; a `<!DOCTYPE` inside a comment was refused (macOS); the serializer could misread a delimiter. | All fixed. |
+
 ## Not covered by code
 
 - **Signing:**
@@ -77,4 +97,4 @@ The files a user opens (PPTX, PPTM, PDF) may come from anyone. Opening one must 
   - users therefore see Gatekeeper and SmartScreen warnings and cannot verify who built the file, apart from `SHA256SUMS.txt`
   - signing needs an Apple Developer ID and a Windows code-signing certificate
 - **The operating system's PDF renderers** (Core Graphics on macOS, Windows.Data.Pdf on Windows) read PDF files, so they are part of the attack surface. They are kept up to date by the system.
-- **Windows-only checks not yet run on a real PC:** the program paths, the DLL directory call, PowerPoint `AutomationSecurity` and the device-name refusal. They are built with the Windows target, but the test suite runs on a Mac.
+- **Windows-only checks not yet run on a real PC:** the program paths, the DLL directory call, PowerPoint `AutomationSecurity` (now also restored afterwards) and the device-name refusal. They are built with the Windows target, but the test suite runs on a Mac.

@@ -41,10 +41,18 @@ struct SlideScaler {
                 let isMaster = folder == "slideMasters" || folder == "theme"
                 // Frames are read before the uniform pass rescales them.
                 var frames: [ShapeFrame] = [], videos: [String] = []
+                // A background from an earlier resize is made again for the new proportion,
+                // for the same video, even though that video no longer fills the slide.
+                var owners: [String] = []
+                if !sameAspect(size, target), ["slides", "slideLayouts", "slideMasters"].contains(folder), let root = document.rootElement() {
+                    if let tree = try document.nodes(forXPath: "//*[local-name() = 'spTree']").first as? XMLElement { owners = VideoBackdrop.backdropOwners(tree) }
+                    VideoBackdrop.removeBackdrops(root)
+                }
                 if ["slides", "slideLayouts", "slideMasters"].contains(folder),
                    let tree = try document.nodes(forXPath: "//*[local-name() = 'spTree']").first as? XMLElement {
                     collectFrames(tree, into: &frames)
-                    if !sameAspect(size, target) { videos = VideoBackdrop.spanningVideos(tree, width: page.width, height: page.height) }
+                    if !sameAspect(size, target) { let spanning: [String] = VideoBackdrop.spanningVideos(tree, width: page.width, height: page.height)
+                        videos = owners + spanning.filter { !owners.contains($0) } }
                 }
                 if !page.isUnit { try scale(document, factor: page.s, isMaster: isMaster) }
                 for frame in frames { page.place(frame) { part.pad(pad, $0, $1) } }
@@ -189,13 +197,15 @@ struct SlideScaler {
             }
             return "(\(trimmed))*\(formatCoord(factor))"
         }
-        let pattern = "^(\(NSRegularExpression.escapedPattern(for: variable)))\\s*([+-])\\s*([0-9]+(?:\\.[0-9]+)?)$"
+        // PowerPoint writes the variable with or without a leading "#".
+        let pattern = "^(#?)(\(NSRegularExpression.escapedPattern(for: variable)))\\s*([+-])\\s*([0-9]+(?:\\.[0-9]+)?)$"
         if let regex = try? NSRegularExpression(pattern: pattern),
            let match = regex.firstMatch(in: trimmed, range: NSRange(trimmed.startIndex..., in: trimmed)),
-           let opRange = Range(match.range(at: 2), in: trimmed),
-           let numRange = Range(match.range(at: 3), in: trimmed),
+           let hashRange = Range(match.range(at: 1), in: trimmed),
+           let opRange = Range(match.range(at: 3), in: trimmed),
+           let numRange = Range(match.range(at: 4), in: trimmed),
            let num = Double(trimmed[numRange]) {
-            return "\(variable)\(trimmed[opRange])\(formatCoord(num * factor))"
+            return "\(trimmed[hashRange])\(variable)\(trimmed[opRange])\(formatCoord(num * factor))"
         }
         return fmla
     }
@@ -216,6 +226,9 @@ struct SlideScaler {
                     if !current.isEmpty { tokens.append(current); current = "" }
                     tokens.append(String(ch))
                 }
+            } else if (ch == "-" || ch == "+"), let last = current.last, last != "e", last != "E" {
+                // "0.5-0.25" is two numbers; a sign after an exponent is not.
+                tokens.append(current); current = String(ch)
             } else {
                 current.append(ch)
             }

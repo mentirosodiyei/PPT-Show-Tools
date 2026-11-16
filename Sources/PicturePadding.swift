@@ -14,6 +14,22 @@ enum PicturePadding {
     static let imageRelationship = "http://schemas.openxmlformats.org/officeDocument/2006/relationships/image"
     /// Canvas limit: big enough for 8K walls, small enough for memory.
     static let maxPixels = 36_000_000.0
+    /// Pictures larger than this are not decoded at all (the same limit the
+    /// Windows decoder's 512 MB allocation cap sets for RGBA).
+    static let maxSourcePixels = 128_000_000.0
+
+    /// The picture at index 0, reduced to at most `maxPixels` before any RGBA
+    /// buffer is made; nil when it is larger than `maxSourcePixels`.
+    static func boundedImage(_ source: CGImageSource) -> CGImage? {
+        guard let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
+              let w = props[kCGImagePropertyPixelWidth] as? Int, let h = props[kCGImagePropertyPixelHeight] as? Int, w > 0, h > 0 else { return nil }
+        let area = Double(w) * Double(h)
+        guard area <= maxSourcePixels else { return nil }
+        guard area > maxPixels else { return CGImageSourceCreateImageAtIndex(source, 0, nil) }
+        let side = Int((Double(max(w, h)) * (maxPixels / area).squareRoot()).rounded(.down))
+        let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: false, kCGImageSourceThumbnailMaxPixelSize: side]
+        return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
+    }
 
     /// State shared by every part of one package.
     final class Pad {
@@ -177,9 +193,9 @@ enum PicturePadding {
 
     /// The padded image, encoded as JPEG (photos) or PNG.
     static func padded(_ data: Data, jpeg: Bool, _ sides: [Double]) -> Data? {
-        guard let source = CGImageSourceCreateWithData(data as CFData, nil), let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil), let image = boundedImage(source) else { return nil }
         let w = image.width, h = image.height
-        guard w > 0, h > 0, let original = rgba(image, w, h) else { return nil }
+        guard w > 0, h > 0, Double(w) * Double(h) <= maxPixels * 1.01, let original = rgba(image, w, h) else { return nil }
         let (cw, ch, iw, ih, ox, oy) = canvas(w, h, sides)
         let horizontal = cw > iw
         // Next to the picture the margin takes its exact edge; further out it fades

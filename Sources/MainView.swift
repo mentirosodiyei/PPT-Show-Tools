@@ -104,7 +104,7 @@ struct MainView: View {
         .overlay { if dropTarget { RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor, lineWidth: 3).padding(6).allowsHitTesting(false) } }
         .disabled(busy)
         .onChange(of: function) {
-            source = nil; toolReport = nil
+            source = nil; toolReport = nil; selected = nil
             status = function == .merge ? "Add the presentations in the order you want to merge them." : function == .images ? "Add pictures or folders; they go in the order shown." : "Choose the original file."
         }
         .background(WindowFitter())
@@ -193,7 +193,10 @@ struct MainView: View {
         case .merge:
             let before = files.count
             add(urls)
-            if files.count == before { status = "Only PowerPoint files (PPTX or PPTM) can be merged." }
+            if files.count == before {
+                let presentations = urls.contains { ["pptx", "pptm"].contains($0.pathExtension.lowercased()) }
+                status = presentations ? "Already in the list." : "Only PowerPoint files (PPTX or PPTM) can be merged."
+            }
         case .images:
             addImages(urls)
         default:

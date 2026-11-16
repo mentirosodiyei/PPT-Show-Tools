@@ -67,11 +67,14 @@ extension PresentationTools {
               let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
               let pw = props[kCGImagePropertyPixelWidth] as? Int, let ph = props[kCGImagePropertyPixelHeight] as? Int, pw > 0, ph > 0 else { return nil }
         let ext = url.pathExtension.lowercased(), orientation = props[kCGImagePropertyOrientation] as? Int ?? 1
+        // Kept byte for byte below; anything converted is decoded, so very large pictures are refused.
+        let decodable = Double(pw) * Double(ph) <= PicturePadding.maxSourcePixels
         let turned = (5...8).contains(orientation)
         let (w, h) = turned ? (Double(ph), Double(pw)) : (Double(pw), Double(ph))
         if ["jpg", "jpeg", "png", "gif"].contains(ext) && orientation == 1, let data = try? Data(contentsOf: url) {
             return PreparedImage(data: data, ext: ext == "jpeg" ? "jpg" : ext, width: w, height: h, note: nil)
         }
+        guard decodable else { return nil }
         let options: [CFString: Any] = [kCGImageSourceCreateThumbnailFromImageAlways: true, kCGImageSourceCreateThumbnailWithTransform: true, kCGImageSourceThumbnailMaxPixelSize: max(pw, ph)]
         guard let image = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else { return nil }
         // Decoders often add an alpha channel to opaque photos: look at the pixels.
@@ -85,15 +88,23 @@ extension PresentationTools {
         return PreparedImage(data: result as Data, ext: png ? "png" : "jpg", width: Double(image.width), height: Double(image.height), note: note)
     }
 
+    /// Looks at the pixels in strips of about 4 million, so no second full-size buffer is made.
     static func hasTransparentPixels(_ image: CGImage) -> Bool {
         let w = image.width, h = image.height
-        var pixels = [UInt8](repeating: 0, count: w * h * 4)
-        let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
-            guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
-            ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h)); return true
+        let rows = max(1, min(h, 4_000_000 / max(w, 1)))
+        var pixels = [UInt8](repeating: 0, count: w * rows * 4)
+        for top in stride(from: 0, to: h, by: rows) {
+            let count = min(rows, h - top)
+            guard let strip = image.cropping(to: CGRect(x: 0, y: top, width: w, height: count)) else { return true }
+            let drawn = pixels.withUnsafeMutableBytes { buffer -> Bool in
+                guard let ctx = CGContext(data: buffer.baseAddress, width: w, height: count, bitsPerComponent: 8, bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return false }
+                ctx.clear(CGRect(x: 0, y: 0, width: w, height: count))
+                ctx.draw(strip, in: CGRect(x: 0, y: 0, width: w, height: count)); return true
+            }
+            guard drawn else { return true }
+            if stride(from: 3, to: w * count * 4, by: 4).contains(where: { pixels[$0] < 255 }) { return true }
         }
-        guard drawn else { return true }
-        return stride(from: 3, to: pixels.count, by: 4).contains { pixels[$0] < 255 }
+        return false
     }
 
     /// Spaces for `count` pictures on a `w` × `h` slide (points): one fills the

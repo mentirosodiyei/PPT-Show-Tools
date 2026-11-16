@@ -105,6 +105,9 @@ struct PowerPointSave {
         let fm = FileManager.default
         guard output.pathExtension.lowercased() == "pptx" else { try fail("Saving with PowerPoint produces PPTX. To keep macros, use Merge with a PPTM output.") }
         guard !fm.fileExists(atPath: output.path), !ReportStore.collides(output, [".report.json", ".report.txt"]) else { try fail("The output file or its report already exists. Choose another name.") }
+        if let first = inputs.first, try packageHasMacros(first) {
+            try fail("“\(first.lastPathComponent)” contains macros (VBA). “Merge and save with PowerPoint…” saves PPTX, which cannot hold them: use Merge with a PPTM output instead.")
+        }
         // PowerPoint is sandboxed: the intermediate lives in the destination folder,
         // so a single folder access grant covers both files.
         let intermediate = output.deletingLastPathComponent().appendingPathComponent("PPTShowTools-temp-\(UUID().uuidString.prefix(8)).pptx")

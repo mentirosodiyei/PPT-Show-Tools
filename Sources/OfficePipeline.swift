@@ -2,7 +2,7 @@ import Foundation
 struct OfficePreparedFile:Codable {let name:String;let path:String;let slides:Int;let macroEnabled:Bool}
 struct OfficePreparation:Codable {let width:Int64;let height:Int64;let files:[OfficePreparedFile]}
 struct OfficePipeline {
-    static func prepare(inputs:[URL],destination:URL) throws -> OfficePreparation {
+    static func prepare(inputs:[URL],destination:URL,fixedSize:(Int64,Int64)?=nil) throws -> OfficePreparation {
         let fm=FileManager.default
         guard inputs.count>=2,!fm.fileExists(atPath:destination.path) else {try fail("Two inputs and a new preparation folder are required.")}
         let temp=fm.temporaryDirectory.appendingPathComponent("PPTShowTools-Office-"+UUID().uuidString)
@@ -15,7 +15,7 @@ struct OfficePipeline {
             guard doc.rootElement()?.uri == pNS,let size=list(doc.rootElement()!,"sldSz"),let w=Int64(attr(size,"cx")),let h=Int64(attr(size,"cy")),(minSlideEMU...maxSlideEMU).contains(w),(minSlideEMU...maxSlideEMU).contains(h) else{try fail("Cannot read the size of \(input.lastPathComponent)")}
             roots.append(root);docs.append(doc);sizes.append((w,h))
         }
-        let target=try planSlideSize(sizes,fixed:nil)
+        let target=try planSlideSize(sizes,fixed:fixedSize)
         try fm.createDirectory(at:destination,withIntermediateDirectories:true)
         var files:[OfficePreparedFile]=[]
         do {
@@ -23,7 +23,7 @@ struct OfficePipeline {
                 try SlideScaler.normalize(package:roots[i],presentation:docs[i],from:sizes[i],to:target)
                 let path=destination.appendingPathComponent("source\(i)."+inputs[i].pathExtension.lowercased())
                 try run("/usr/bin/ditto",["-c","-k","--norsrc","--noextattr",roots[i].path,path.path])
-                files.append(OfficePreparedFile(name:inputs[i].lastPathComponent,path:path.path,slides:try orderedParts(roots[i]).count,macroEnabled:fm.fileExists(atPath:roots[i].appendingPathComponent("ppt/vbaProject.bin").path)))
+                files.append(OfficePreparedFile(name:inputs[i].lastPathComponent,path:path.path,slides:try orderedParts(roots[i]).count,macroEnabled:!macroParts(roots[i]).isEmpty))
             }
         } catch {try? fm.removeItem(at:destination);throw error}
         return OfficePreparation(width:target.0,height:target.1,files:files)

@@ -117,26 +117,35 @@ struct Prepared {
     note: Option<String>,
 }
 
-/// HEIC, HEIF and AVIF are decoded by the FFmpeg shipped with the app.
+/// HEIC, HEIF and AVIF are decoded by the FFmpeg shipped with the app: only
+/// from a local file, with a time limit, into a temporary PNG of bounded size.
 fn decode_with_ffmpeg(path: &Path) -> Option<image::DynamicImage> {
     let ffmpeg = crate::video::ffmpeg()?;
+    let input = std::path::absolute(path).ok()?;
+    let temp = crate::package::TempDir::new("PPTShowTools-Decode").ok()?;
+    let output = temp.path().join("frame.png");
     let mut command = std::process::Command::new(ffmpeg);
-    command.args(["-nostdin", "-loglevel", "error", "-i"]).arg(path).args(["-frames:v", "1", "-c:v", "png", "-f", "image2pipe", "-"]);
-    command.stdin(std::process::Stdio::null()).stderr(std::process::Stdio::null());
-    #[cfg(windows)]
-    {
-        use std::os::windows::process::CommandExt;
-        command.creation_flags(0x0800_0000);
-    }
-    let out = command.output().ok()?;
-    if !out.status.success() {
+    command.args(["-nostdin", "-y", "-loglevel", "error", "-protocol_whitelist", "file", "-i"]).arg(&input).args(["-frames:v", "1", "-c:v", "png", "-f", "image2"]).arg(&output);
+    if !crate::video::run_limited(command, std::time::Duration::from_secs(120)) {
         return None;
     }
-    image::load_from_memory_with_format(&out.stdout, image::ImageFormat::Png).ok()
+    if std::fs::metadata(&output).ok()?.len() > 512 * 1024 * 1024 {
+        return None;
+    }
+    let reader = image::ImageReader::open(&output).ok()?.with_guessed_format().ok()?;
+    let (w, h) = reader.into_dimensions().ok()?;
+    if w as f64 * h as f64 > crate::padding::MAX_SOURCE_PIXELS {
+        return None;
+    }
+    image::open(&output).ok()
 }
 
 fn has_transparent_pixels(img: &image::DynamicImage) -> bool {
-    img.color().has_alpha() && img.to_rgba8().pixels().any(|p| p[3] < 255)
+    match img {
+        image::DynamicImage::ImageRgba8(b) => b.pixels().any(|p| p[3] < 255),
+        image::DynamicImage::ImageLumaA8(b) => b.pixels().any(|p| p[1] < 255),
+        other => other.color().has_alpha() && other.to_rgba8().pixels().any(|p| p[3] < 255),
+    }
 }
 
 /// JPEG, PNG and GIF go in unchanged; other formats, and photos stored
@@ -155,10 +164,15 @@ fn prepare(path: &Path) -> Option<Prepared> {
         if w == 0 || h == 0 {
             return None;
         }
+        let decodable = w as f64 * h as f64 <= crate::padding::MAX_SOURCE_PIXELS;
         let upright = orientation == image::metadata::Orientation::NoTransforms;
         if keep && upright {
             let data = read_file(path).ok()?;
             return Some(Prepared { data, ext: if ext == "jpeg" { "jpg".into() } else { ext }, width: w as f64, height: h as f64, note: None });
+        }
+        // Kept byte for byte above; anything converted is decoded, so very large pictures are refused.
+        if !decodable {
+            return None;
         }
         let mut img = image::DynamicImage::from_decoder(decoder).ok()?;
         img.apply_orientation(orientation);

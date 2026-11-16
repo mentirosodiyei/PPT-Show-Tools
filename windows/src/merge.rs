@@ -1,7 +1,7 @@
 //! Open XML merge: each imported package is namespaced intact under
 //! pptMerger/sourceN/, so its masters, themes and relative links survive.
 use crate::package::{copy_new, copy_tree, extension, extract, file_name, package_files, zip_dir, TempDir};
-use crate::verifier::{slide_size, standardize, verify, FileValidation, PackageSnapshot};
+use crate::verifier::{macro_parts, owner_of_rels, resolve_part, slide_size, verify, FileValidation, PackageSnapshot, UNUSED_IMPORTED_PARTS};
 use crate::xml::{read_xml, write_xml, Element, CT_NS, PKG_NS, P_NS, R_NS};
 use crate::{fail, scaler, Result};
 use serde::{Deserialize, Serialize};
@@ -57,14 +57,33 @@ impl MergeReport {
     }
 }
 
-/// Output slide size. `fixed` is the size forced in Settings; None means
-/// automatic: a size or proportion shared by every source is kept (at the
-/// largest size); mixed proportions use 16:9, at the largest 16:9 source or
-/// 1920 × 1080 px when there is none. Every source is then adapted to it.
-/// Parts of an imported presentation that nothing in the result uses: its document
-/// properties (authors, company, thumbnail) and its VBA project, which is never
-/// merged. They are removed instead of being carried along unused.
-const UNUSED_IMPORTED_PARTS: [&str; 4] = ["docProps", "ppt/vbaProject.bin", "ppt/vbaData.xml", "ppt/_rels/vbaProject.bin.rels"];
+/// Characters a relationship target may hold without percent-encoding.
+fn percent_encode_target(part: &str) -> String {
+    let mut out = String::new();
+    for b in part.bytes() {
+        if b.is_ascii_alphanumeric() || b"-._~/!$&'()*+,;=:@".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
+}
+
+/// An internal target of an imported package, resolved against its owner within
+/// that package (".." never climbs above its root) and made absolute under
+/// `prefix`, so no relationship can reach the base presentation's parts.
+fn imported_target(target: &str, owner: &str, prefix: &str) -> String {
+    if target.is_empty() || target.starts_with('#') {
+        return target.to_string();
+    }
+    let fragment = target.find('#').map(|i| &target[i..]).unwrap_or("");
+    let mut part = resolve_part(owner, target);
+    if target.contains('%') {
+        part = percent_encode_target(&part);
+    }
+    format!("/{prefix}{part}{fragment}")
+}
 
 /// External targets PowerPoint loads by itself (linked pictures, media, OLE
 /// links); hyperlinks only open when clicked and are left out.
@@ -88,6 +107,10 @@ fn external_link_warning(file: &str, targets: &[String]) -> Option<String> {
     Some(format!("{file}: {} linked file(s) or address(es) outside the presentation ({}). PowerPoint may load them when the result is opened; check them if you do not trust the original.", targets.len(), sample.join(", ")))
 }
 
+/// Output slide size. `fixed` is the size forced in Settings; None means
+/// automatic: a size or proportion shared by every source is kept (at the
+/// largest size); mixed proportions use 16:9, at the largest 16:9 source or
+/// 1920 × 1080 px when there is none. Every source is then adapted to it.
 pub fn plan_slide_size(sizes: &[(i64, i64)], fixed: Option<(i64, i64)>) -> Result<(i64, i64)> {
     let area = |s: &&(i64, i64)| s.0 as i128 * s.1 as i128;
     let target = if let Some(target) = fixed {
@@ -123,12 +146,11 @@ fn mkdir(p: &Path) -> Result<()> {
     std::fs::create_dir_all(p).or_else(|e| fail(format!("Cannot create {}: {e}", p.display())))
 }
 
-fn part_of(target: &str) -> String {
-    if let Some(rest) = target.strip_prefix('/') {
-        rest.to_string()
-    } else {
-        standardize(&format!("/ppt/{target}")).trim_start_matches('/').to_string()
-    }
+/// Whether a presentation holds macros (VBA), whatever their part names.
+pub fn has_macros(input: &Path) -> Result<bool> {
+    let temp = TempDir::new("PPTShowTools-Macros")?;
+    extract(input, temp.path())?;
+    Ok(!macro_parts(temp.path()).is_empty())
 }
 
 pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Result<MergeReport> {
@@ -269,9 +291,10 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
         let source = &roots[i];
         let source_doc = &other_docs[i - 1];
         let prefix = format!("pptMerger/source{i}/");
-        let had_vba = source.join("ppt").join("vbaProject.bin").exists();
-        for part in UNUSED_IMPORTED_PARTS {
-            let path = crate::xml::part_path(source, part);
+        let macros = macro_parts(source);
+        let had_vba = !macros.is_empty();
+        for part in UNUSED_IMPORTED_PARTS.iter().map(|s| s.to_string()).chain(macros) {
+            let path = crate::xml::part_path(source, &part);
             if path.is_dir() {
                 std::fs::remove_dir_all(&path).or_else(|e| fail(e.to_string()))?;
             } else if path.exists() {
@@ -282,9 +305,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             let sr = read_xml(source, "ppt/_rels/presentation.xml.rels")?;
             let found = sr.root.named("Relationship").find(|e| e.attr("Type").ends_with("/notesMaster")).cloned();
             if let Some(e) = found {
-                let old = e.attr("Target");
-                let part = if let Some(r) = old.strip_prefix('/') { r.to_string() } else { format!("ppt/{old}") };
-                let target = format!("/{prefix}{part}");
+                let target = imported_target(e.attr("Target"), "ppt/presentation.xml", &prefix);
                 let new_id = add_rel(&mut rels, e.attr("Type"), &target);
                 notes_target = Some(target);
                 let mut list = Element::new(&format!("{p_prefix}:notesMasterIdLst"), P_NS);
@@ -296,16 +317,23 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
         }
         let dest = crate::xml::part_path(&base, &prefix);
         copy_tree(source, &dest)?;
+        // Every internal target is resolved inside the imported package; absolute
+        // targets, and relative ones that would climb out of it, are rewritten under its prefix.
         for part in package_files(&dest).iter().filter(|p| p.ends_with(".rels")) {
             let mut d = read_xml(&dest, part)?;
+            let owner = owner_of_rels(part);
             for e in d.root.elems_mut().filter(|e| e.local() == "Relationship") {
                 if e.attr("TargetMode") == "External" {
                     continue;
                 }
                 if e.attr("Type").ends_with("/notesMaster") && notes_target.is_some() {
                     e.set_attr("Target", notes_target.as_deref().unwrap_or(""));
-                } else if let Some(rest) = e.attr("Target").strip_prefix('/').map(str::to_string) {
-                    e.set_attr("Target", &format!("/{prefix}{rest}"));
+                } else {
+                    // A relative target that stays inside its package is left as it is.
+                    let target = e.attr("Target").to_string();
+                    if target.starts_with('/') || resolve_part(&format!("{prefix}{owner}"), &target) != format!("{prefix}{}", resolve_part(&owner, &target)) {
+                        e.set_attr("Target", &imported_target(&target, &owner, &prefix));
+                    }
                 }
             }
             write_xml(&d, &dest, part)?;
@@ -335,14 +363,15 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             defaults.insert(ext, kind);
         }
         // Explicit types prevent conflicting default extensions across packages.
-        let overrides: HashMap<String, String> = src_ct.root.named("Override").map(|e| (e.attr("PartName").trim_start_matches('/').to_string(), e.attr("ContentType").to_string())).collect();
+        // Part names are case-insensitive and may be percent-encoded (OPC).
+        let overrides: HashMap<String, String> = src_ct.root.named("Override").map(|e| (crate::verifier::part_name_key(e.attr("PartName")), e.attr("ContentType").to_string())).collect();
         for part in package_files(source) {
             if part == "[Content_Types].xml" || part.ends_with(".rels") {
                 continue;
             }
             let name = part.rsplit('/').next().unwrap_or("");
             let ext = name.rsplit_once('.').map(|(_, e)| e.to_lowercase()).unwrap_or_default();
-            let Some(kind) = overrides.get(&part).or_else(|| defaults.get(&ext)) else { return fail(format!("Missing content type: {part}")) };
+            let Some(kind) = overrides.get(&crate::verifier::part_name_key(&part)).or_else(|| defaults.get(&ext)) else { return fail(format!("Missing content type: {part}")) };
             let mut e = Element::new(&format!("{ct_prefix}Override"), CT_NS);
             e.set_attr("PartName", &format!("/{prefix}{part}"));
             e.set_attr("ContentType", kind);
@@ -360,7 +389,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             let mut imported = vec![];
             for e in source_list.named(child_name) {
                 let Some(rel) = by_id.get(e.rid()) else { return fail("Missing presentation relationship") };
-                let new_rid = add_rel(&mut rels, rel.attr("Type"), &format!("/{prefix}{}", part_of(rel.attr("Target"))));
+                let new_rid = add_rel(&mut rels, rel.attr("Type"), &imported_target(rel.attr("Target"), "ppt/presentation.xml", &prefix));
                 let mut node = e.clone();
                 node.set_attr_ns(R_NS, "id", &r_prefix, &new_rid);
                 if child_name == "sldId" {
@@ -393,7 +422,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
                     }
                     let rel = by_id.get(&id).filter(|r| r.attr("Type").ends_with("/font") && r.attr("TargetMode") != "External");
                     let Some(rel) = rel else { return fail(format!("Missing or invalid embedded font relationship in “{}”.", file_name(&inputs[i]))) };
-                    let new_id = add_rel(&mut rels, rel.attr("Type"), &format!("/{prefix}{}", part_of(rel.attr("Target"))));
+                    let new_id = add_rel(&mut rels, rel.attr("Type"), &imported_target(rel.attr("Target"), "ppt/presentation.xml", &prefix));
                     style.set_attr_ns(R_NS, "id", &r_prefix, &new_id);
                 }
                 fonts.push(node);
@@ -408,7 +437,7 @@ pub fn merge_with(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, 
             warnings.push(format!("{}: its VBA project (macros) was removed; only the first file's macros are kept.", file_name(&inputs[i])));
         }
     }
-    let has_macros = base.join("ppt").join("vbaProject.bin").exists();
+    let has_macros = !macro_parts(&base).is_empty();
     if out_ext == "pptx" && has_macros {
         return fail("The first file contains VBA: save as PPTM to keep it.");
     }

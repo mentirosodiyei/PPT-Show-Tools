@@ -42,7 +42,12 @@ fn folder() -> Option<PathBuf> {
     Some(base.join("PPT Show Tools").join("Logs"))
 }
 
-/// Creates the logs folder and deletes what is older than 30 days.
+/// Only files this app writes are ever deleted, even if the folder is shared.
+pub fn is_own_file(name: &str) -> bool {
+    [".report.json", ".report.txt", ".report.log"].iter().any(|s| name.ends_with(s)) || (name.starts_with("PPTShowTools-ERROR-") && name.ends_with(".log"))
+}
+
+/// Creates the logs folder and deletes the app's own files older than 30 days.
 /// None when nothing may be written (portable).
 pub fn prepare() -> Option<PathBuf> {
     let dir = folder()?;
@@ -51,7 +56,7 @@ pub fn prepare() -> Option<PathBuf> {
     if let Ok(entries) = std::fs::read_dir(&dir) {
         for entry in entries.flatten() {
             let Ok(meta) = entry.metadata() else { continue };
-            if meta.is_file() && meta.modified().is_ok_and(|m| m < limit) {
+            if meta.is_file() && meta.modified().is_ok_and(|m| m < limit) && is_own_file(&entry.file_name().to_string_lossy()) {
                 let _ = std::fs::remove_file(entry.path());
             }
         }

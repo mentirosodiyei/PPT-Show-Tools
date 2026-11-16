@@ -24,7 +24,7 @@ enum VideoBackdrop {
 
     /// Ids of top-level videos that cover (almost) the whole slide.
     static func spanningVideos(_ tree: XMLElement, width: Double, height: Double) -> [String] {
-        (tree.children ?? []).compactMap { $0 as? XMLElement }.filter(isVideo).compactMap { shape in
+        (tree.children ?? []).compactMap { $0 as? XMLElement }.filter { isVideo($0) && !isBackdrop($0) }.compactMap { shape in
             guard let ext = list(shape, "spPr").flatMap({ list($0, "xfrm") }).flatMap({ list($0, "ext") }),
                   let cx = Double(attr(ext, "cx")), let cy = Double(attr(ext, "cy")), cx >= 0.9 * width, cy >= 0.9 * height else { return nil }
             return shapeID(shape)
@@ -130,6 +130,8 @@ enum VideoBackdrop {
         guard (try? posterPNG.write(to: package.appendingPathComponent(posterName))) != nil else { return nil }
         pad.extensions.insert("png")
         let moving = blurredVideo(package.appendingPathComponent(video), package.appendingPathComponent(videoName), size)
+        // A failed export can leave a partial file that nothing would reference.
+        if !moving { try? FileManager.default.removeItem(at: package.appendingPathComponent(videoName)) }
         guard let posterRel = part.addRelationship(pad, PicturePadding.imageRelationship, "/" + posterName) else { return nil }
         var rels: (String, String)? = nil
         if moving {
@@ -203,21 +205,49 @@ enum VideoBackdrop {
         }
     }
 
+    /// Media files this module writes: pst-blur-<8 hex>.png or .mp4.
+    static func isBackdropFile(_ fileName: String) -> Bool {
+        fileName.range(of: #"^pst-blur-[0-9a-f]{8}\.(png|mp4)$"#, options: .regularExpression) != nil
+    }
+
+    static func isBackdrop(_ shape: XMLElement) -> Bool {
+        shape.localName == "pic" && list(shape, "nvPicPr").flatMap({ list($0, "cNvPr") }).map({ attr($0, "name") == name }) == true
+    }
+
+    /// Ids of the videos that already have a blurred copy (the copy sits just behind its video).
+    static func backdropOwners(_ tree: XMLElement) -> [String] {
+        let shapes: [XMLElement] = (tree.children ?? []).compactMap { $0 as? XMLElement }
+        var owners: [String] = []
+        for (i, shape) in shapes.enumerated() where isBackdrop(shape) {
+            for later in shapes[(i + 1)...] where isVideo(later) && !isBackdrop(later) { owners.append(shapeID(later)); break }
+        }
+        return owners
+    }
+
     /// The verifier compares a part without the copies this module adds.
     static func withoutBackdrops(_ element: XMLElement) -> XMLElement {
-        let marked = ((try? element.nodes(forXPath: ".//*[local-name() = 'cNvPr']")) ?? []).compactMap { $0 as? XMLElement }.filter { attr($0, "name") == name }
-        guard !marked.isEmpty else { return element }
-        let ids = marked.map { attr($0, "id") }
+        guard hasBackdrops(element) else { return element }
         let copy = element.copy() as! XMLElement
+        removeBackdrops(copy)
+        return copy
+    }
+    static func hasBackdrops(_ element: XMLElement) -> Bool {
+        ((try? element.nodes(forXPath: ".//*[local-name() = 'cNvPr']")) ?? []).contains { ($0 as? XMLElement).map { attr($0, "name") == name } ?? false }
+    }
+
+    /// Removes the copies an earlier resize added, and the timing that plays them,
+    /// so resizing again makes one new background instead of stacking another.
+    static func removeBackdrops(_ element: XMLElement) {
+        let ids = ((try? element.nodes(forXPath: ".//*[local-name() = 'cNvPr']")) ?? []).compactMap { $0 as? XMLElement }.filter { attr($0, "name") == name }.map { attr($0, "id") }
+        guard !ids.isEmpty else { return }
         func strip(_ e: XMLElement) {
             for child in (e.children ?? []).compactMap({ $0 as? XMLElement }) {
                 let local = child.localName ?? ""
-                if local == "pic", list(child, "nvPicPr").flatMap({ list($0, "cNvPr") }).map({ attr($0, "name") == name }) == true { child.detach(); continue }
+                if isBackdrop(child) { child.detach(); continue }
                 if ["cmd", "video", "audio"].contains(local), ids.contains(where: { targets(child, $0) }) { child.detach(); continue }
                 strip(child)
             }
         }
-        strip(copy)
-        return copy
+        strip(element)
     }
 }

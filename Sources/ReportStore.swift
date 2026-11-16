@@ -19,7 +19,12 @@ enum ReportStore {
         return FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Logs/PPT Show Tools")
     }
 
-    /// Creates the folder and deletes what is older than 30 days.
+    /// Only files this app writes are ever deleted, even if the folder is shared.
+    static func isOwnFile(_ name: String) -> Bool {
+        [".report.json", ".report.txt", ".report.log"].contains { name.hasSuffix($0) } || (name.hasPrefix("PPTShowTools-ERROR-") && name.hasSuffix(".log"))
+    }
+
+    /// Creates the folder and deletes the app's own files older than 30 days.
     @discardableResult static func prepare() -> URL? {
         let fm = FileManager.default, dir = folder
         do { try fm.createDirectory(at: dir, withIntermediateDirectories: true) } catch { return nil }
@@ -27,7 +32,7 @@ enum ReportStore {
         let items = (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: [.contentModificationDateKey, .isRegularFileKey])) ?? []
         for item in items {
             guard let values = try? item.resourceValues(forKeys: [.contentModificationDateKey, .isRegularFileKey]),
-                  values.isRegularFile == true, let date = values.contentModificationDate, date < limit else { continue }
+                  values.isRegularFile == true, let date = values.contentModificationDate, date < limit, isOwnFile(item.lastPathComponent) else { continue }
             try? fm.removeItem(at: item)
         }
         return dir

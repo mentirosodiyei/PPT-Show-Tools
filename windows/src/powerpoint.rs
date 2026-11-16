@@ -36,18 +36,24 @@ $ErrorActionPreference = 'Stop'
 $wasRunning = @(Get-Process -Name POWERPNT -ErrorAction SilentlyContinue).Count -gt 0
 try { $app = New-Object -ComObject PowerPoint.Application } catch { [Console]::Error.WriteLine('NO_POWERPOINT'); exit 3 }
 $p = $null
+$security = $null
 try {
-  # ReadOnly = msoTrue, Untitled = msoFalse, WithWindow = msoFalse
   # msoAutomationSecurityForceDisable: no macro of any kind runs in this file.
+  # The user's own setting is put back afterwards (PowerPoint may already be open).
+  $security = $app.AutomationSecurity
   $app.AutomationSecurity = 3
+  # ReadOnly = msoTrue, Untitled = msoFalse, WithWindow = msoFalse
   $p = $app.Presentations.Open($Source, -1, 0, 0)
   $n = $p.Slides.Count
   if ($n -ne $Expected) { throw "PowerPoint opened $n slides instead of $Expected." }
   # 24 = ppSaveAsOpenXMLPresentation
   $p.SaveAs($Target, 24)
-  Write-Output "$n|closed"
+  $state = 'open'
+  try { $p.Close(); $p = $null; $state = 'closed' } catch {}
+  Write-Output "$n|$state"
 } finally {
   if ($p) { try { $p.Close() } catch {} }
+  if ($null -ne $security) { try { $app.AutomationSecurity = $security } catch {} }
   if (-not $wasRunning) { try { if ($app.Presentations.Count -eq 0) { $app.Quit() } } catch {} }
   [void][System.Runtime.InteropServices.Marshal]::ReleaseComObject($app)
 }
@@ -142,6 +148,11 @@ pub fn merge(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>, progr
     }
     if output.exists() || crate::reports::collides(output, &[".report.json", ".report.txt"]) {
         return fail("The output file or its report already exists. Choose another name.");
+    }
+    if let Some(first) = inputs.first() {
+        if crate::merge::has_macros(first)? {
+            return fail(format!("“{}” contains macros (VBA). “Merge and save with PowerPoint…” saves PPTX, which cannot hold them: use Merge with a PPTM output instead.", crate::package::file_name(first)));
+        }
     }
     let temp = TempDir::new("PPTShowTools-PowerPoint")?;
     let intermediate = temp.path().join("open-xml-merge.pptx");

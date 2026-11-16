@@ -37,10 +37,35 @@ func packageFiles(_ root: URL) -> [String] {
     }.sorted()
 }
 
+/// Normalizes "." and ".." in a '/'-separated path, on the text alone (never the
+/// Mac's own file system); ".." above the root stays at the root.
+func standardize(_ path: String) -> String {
+    var out: [Substring] = []
+    for segment in path.split(separator: "/", omittingEmptySubsequences: false) {
+        switch segment {
+        case "", ".": continue
+        case "..": _ = out.popLast()
+        default: out.append(segment)
+        }
+    }
+    let joined = out.joined(separator: "/")
+    return path.hasPrefix("/") ? "/" + joined : joined
+}
+
+/// Part a relationship target points to, relative to the package root: the
+/// fragment is dropped, %XX decoded and the path normalized. Same as resolve_part on Windows.
 func resolvePart(owner: String, target: String) -> String {
-    let clean = String(target.split(separator: "#", omittingEmptySubsequences: false).first ?? "").removingPercentEncoding ?? target
-    let path = clean.hasPrefix("/") ? clean : "/" + (owner as NSString).deletingLastPathComponent + "/" + clean
-    return String((path as NSString).standardizingPath.drop(while: { $0 == "/" }))
+    let raw = String(target.split(separator: "#", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+    let clean = raw.removingPercentEncoding ?? raw
+    let directory = owner.split(separator: "/", omittingEmptySubsequences: false).dropLast().joined(separator: "/")
+    let path = clean.hasPrefix("/") ? clean : "/" + directory + "/" + clean
+    return String(standardize(path).drop(while: { $0 == "/" }))
+}
+
+/// Key for comparing OPC part names, which are case-insensitive (ASCII) and may be percent-encoded.
+func partNameKey(_ name: String) -> String {
+    let trimmed = String(name.drop(while: { $0 == "/" }))
+    return String((trimmed.removingPercentEncoding ?? trimmed).map { $0.isASCII ? Character($0.lowercased()) : $0 })
 }
 
 func orderedParts(_ root: URL) throws -> [String] {
@@ -118,6 +143,8 @@ func ownerOfRels(_ file: String) -> String {
 struct PackageSnapshot {
     let slides: [String]; let parts: [String: PartFingerprint]; let notes: [String: String]; let binaries: [String: String]
     let hasVBA: Bool
+    /// Parts a merge leaves out when this package is imported (not the first file).
+    let droppedOnImport: [String]
     let embeddedFonts: [String]
     let links: [String: [ResourceLink]]
     let slideSize: (Int64, Int64)?
@@ -133,7 +160,8 @@ struct PackageSnapshot {
             slideSize = (w, h)
         }
         for file in packageFiles(root) {
-            if file.hasSuffix(".rels"), ["ppt/slides/", "ppt/slideLayouts/", "ppt/slideMasters/", "ppt/notesSlides/"].contains(where: { file.hasPrefix($0) }) {
+            // Every relationship part: a target anywhere (themes, charts…) must keep pointing inside its own package.
+            if file.hasSuffix(".rels") {
                 links[file] = children(try xml(root, file).rootElement()!, "Relationship").map {
                     ResourceLink(id: attr($0, "Id"), type: attr($0, "Type"), target: attr($0, "Target"), external: attr($0, "TargetMode") == "External")
                 }
@@ -146,12 +174,14 @@ struct PackageSnapshot {
                 binaries[file] = try checksumFile(root.appendingPathComponent(file))
             }
         }
+        let macros = macroParts(root)
         return PackageSnapshot(
             slides: try orderedParts(root),
             parts: parts,
             notes: notes,
             binaries: binaries,
-            hasVBA: FileManager.default.fileExists(atPath: root.appendingPathComponent("ppt/vbaProject.bin").path),
+            hasVBA: !macros.isEmpty,
+            droppedOnImport: ["", "ppt/presentation.xml"] + unusedImportedParts + macros,
             embeddedFonts: embeddedTypefaces(root),
             links: links,
             slideSize: slideSize
@@ -184,10 +214,10 @@ struct PackageVerifier {
         } }
         if let ctRoot = (try? xml(merged, "[Content_Types].xml"))?.rootElement() {
             let defaults = Set(children(ctRoot, "Default").map { attr($0, "Extension").lowercased() })
-            let overrides = Set(children(ctRoot, "Override").map { String(attr($0, "PartName").drop(while: { $0 == "/" })) })
+            let overrides = Set(children(ctRoot, "Override").map { partNameKey(attr($0, "PartName")) })
             for file in allFiles where file != "[Content_Types].xml" {
                 let ext = file.hasSuffix(".rels") ? "rels" : (file as NSString).pathExtension.lowercased()
-                if !overrides.contains(file) && !defaults.contains(ext) {
+                if !overrides.contains(partNameKey(file)) && !defaults.contains(ext) {
                     globalIssues.append("Missing content type in the merged package: \(file)")
                 }
             }
@@ -246,6 +276,8 @@ struct PackageVerifier {
                 }
             }
             for (part, links) in source.links.sorted(by: { $0.key < $1.key }) {
+                // The package root, presentation, properties and macros of an imported file are left out on purpose.
+                if i > 0, source.droppedOnImport.contains(where: { ownerOfRels(part) == $0 || part.hasPrefix($0 + "/") }) { continue }
                 guard names.contains(prefix + part) else { issues.append("Missing resource relationships: \(part)"); continue }
                 let imported = children(try xml(merged, prefix + part).rootElement()!, "Relationship")
                 for link in links where !link.type.hasSuffix("/notesMaster") {
@@ -290,7 +322,9 @@ struct PackageVerifier {
         return results
     }
 
-    static func inspect(inputs: [URL], output: URL) throws -> [FileValidation] {
+    /// `fixedSize` must be the size the output was made with: the output's slide
+    /// size is checked against the one a merge with that setting chooses.
+    static func inspect(inputs: [URL], output: URL, fixedSize: (Int64, Int64)? = nil) throws -> [FileValidation] {
         let fm = FileManager.default, temp = fm.temporaryDirectory.appendingPathComponent("PPTShowTools-Check-" + UUID().uuidString)
         try fm.createDirectory(at: temp, withIntermediateDirectories: true); defer { try? fm.removeItem(at: temp) }
         var snapshots: [PackageSnapshot] = []
@@ -300,6 +334,13 @@ struct PackageVerifier {
         }
         let out = temp.appendingPathComponent("out"); try fm.createDirectory(at: out, withIntermediateDirectories: true)
         try extractPackage(output, to: out)
-        return try verify(sources: snapshots, inputs: inputs, merged: out)
+        var results = try verify(sources: snapshots, inputs: inputs, merged: out)
+        let sizes = snapshots.compactMap { $0.slideSize }
+        let actual = try xml(out, "ppt/presentation.xml").rootElement().flatMap { list($0, "sldSz") }.map { (Int64(attr($0, "cx")) ?? 0, Int64(attr($0, "cy")) ?? 0) }
+        if sizes.count == snapshots.count, let first = results.first, let expected = try? planSlideSize(sizes, fixed: fixedSize), actual.map({ $0 != expected }) ?? true {
+            let issue = "The output's slide size (\(actual.map { describeSize($0) } ?? "missing")) is not the expected \(describeSize(expected))."
+            results[0] = FileValidation(file: first.file, status: "import_failed_validation", checkedSlides: first.checkedSlides, slidesWithAnimation: first.slidesWithAnimation, binaryResourcesChecked: first.binaryResourcesChecked, checks: first.checks, issues: first.issues + [issue], needsReview: first.needsReview)
+        }
+        return results
     }
 }

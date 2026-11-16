@@ -107,7 +107,7 @@ fn run_cli(all: &[String]) -> i32 {
         };
         match command {
             "--office-prepare" if args.len() >= 4 => {
-                print_json(&office::prepare(&paths(3), &PathBuf::from(args[2]))?)?;
+                print_json(&office::prepare(&paths(3), &PathBuf::from(args[2]), fixed)?)?;
                 Ok(0)
             }
             "--office-verify" if args.len() >= 4 => {
@@ -116,7 +116,7 @@ fn run_cli(all: &[String]) -> i32 {
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }
             "--verify" if args.len() >= 5 => {
-                let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]))?;
+                let checks = verifier::inspect(&paths(3), &PathBuf::from(args[2]), fixed)?;
                 print_json(&checks)?;
                 Ok(if checks.iter().all(|c| c.issues.is_empty()) { 0 } else { 2 })
             }

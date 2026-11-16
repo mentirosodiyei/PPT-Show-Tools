@@ -181,7 +181,8 @@ pub fn notes_text(root: &Path, slide: &str) -> Result<String> {
             }
         }
     }
-    Ok(paragraphs.join("\n").trim().to_string())
+    // A carriage return (&#13;) would come back as a line feed once written and read again.
+    Ok(paragraphs.join("\n").replace("\r\n", "\n").replace('\r', "\n").trim().to_string())
 }
 
 pub fn extract_notes(input: &Path, output: &Path) -> Result<ToolReport> {

@@ -53,6 +53,20 @@ extension PresentationTools {
             guard fm.fileExists(atPath: root.appendingPathComponent(relsPath).path), let rels = try xml(root, relsPath).rootElement() else { continue }
             // Poster frames: the still picture of a video or sound is not an image of its own.
             var posters = Set<String>()
+            // Blurred backgrounds added by a resize are not the presentation's own media.
+            var backdropRefs = Set<String>(), referenced = Set<String>()
+            if let element = (try? xml(root, slide))?.rootElement() {
+                func references(_ e: XMLElement, into set: inout Set<String>) {
+                    for a in e.attributes ?? [] where a.uri == rNS { if let v = a.stringValue { set.insert(v) } }
+                    for case let c as XMLElement in e.children ?? [] { references(c, into: &set) }
+                }
+                func walk(_ e: XMLElement) {
+                    if VideoBackdrop.isBackdrop(e) { references(e, into: &backdropRefs); return }
+                    for a in e.attributes ?? [] where a.uri == rNS { if let v = a.stringValue { referenced.insert(v) } }
+                    for case let c as XMLElement in e.children ?? [] { walk(c) }
+                }
+                walk(element)
+            }
             if let doc = try? xml(root, slide), let pics = try? doc.nodes(forXPath: "//*[local-name() = 'pic']") {
                 for case let pic as XMLElement in pics {
                     guard let nv = list(pic, "nvPicPr").flatMap({ list($0, "nvPr") }), list(nv, "videoFile") != nil || list(nv, "audioFile") != nil,
@@ -70,6 +84,8 @@ extension PresentationTools {
                 else if type.hasSuffix("/media") { kind = audioExtensions.contains(ext) ? .audio : videoExtensions.contains(ext) ? .video : nil }
                 else { kind = nil }
                 guard let kind, kinds.contains(kind) else { continue }
+                let synthetic = backdropRefs.contains(attr(rel, "Id")) || VideoBackdrop.isBackdropFile((target as NSString).lastPathComponent)
+                if synthetic && !referenced.contains(attr(rel, "Id")) { continue }
                 if attr(rel, "TargetMode") == "External" { if !linked.contains(target) { linked.append(target) }; continue }
                 let part = resolvePart(owner: slide, target: target)
                 if let i = byPart[part] { if !items[i].slides.contains(number) { items[i].slides.append(number) }; continue }

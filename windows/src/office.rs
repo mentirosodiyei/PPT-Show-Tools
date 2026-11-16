@@ -23,7 +23,7 @@ pub struct OfficePreparation {
     pub files: Vec<OfficePreparedFile>,
 }
 
-pub fn prepare(inputs: &[PathBuf], destination: &Path) -> Result<OfficePreparation> {
+pub fn prepare(inputs: &[PathBuf], destination: &Path, fixed: Option<(i64, i64)>) -> Result<OfficePreparation> {
     if inputs.len() < 2 || destination.exists() {
         return fail("Two inputs and a new preparation folder are required.");
     }
@@ -46,7 +46,7 @@ pub fn prepare(inputs: &[PathBuf], destination: &Path) -> Result<OfficePreparati
         docs.push(doc);
         sizes.push(size);
     }
-    let target = crate::merge::plan_slide_size(&sizes, None)?;
+    let target = crate::merge::plan_slide_size(&sizes, fixed)?;
     std::fs::create_dir_all(destination).or_else(|e| fail(e.to_string()))?;
     let mut files = vec![];
     let result = (|| -> Result<()> {
@@ -54,7 +54,7 @@ pub fn prepare(inputs: &[PathBuf], destination: &Path) -> Result<OfficePreparati
             scaler::normalize(&roots[i], &mut docs[i], sizes[i], target)?;
             let path = destination.join(format!("source{i}.{}", extension(&inputs[i])));
             zip_dir(&roots[i], &path)?;
-            files.push(OfficePreparedFile { name: file_name(&inputs[i]), path: path.display().to_string(), slides: ordered_parts(&roots[i])?.len(), macro_enabled: roots[i].join("ppt").join("vbaProject.bin").exists() });
+            files.push(OfficePreparedFile { name: file_name(&inputs[i]), path: path.display().to_string(), slides: ordered_parts(&roots[i])?.len(), macro_enabled: !crate::verifier::macro_parts(&roots[i]).is_empty() });
         }
         Ok(())
     })();

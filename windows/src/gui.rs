@@ -427,9 +427,10 @@ impl App {
         match self.function {
             Function::Merge => {
                 let before = self.files.len();
+                let presentations = urls.iter().any(|u| ["pptx", "pptm"].contains(&extension(u).as_str()));
                 self.add(urls);
                 if self.files.len() == before {
-                    self.status = "Only PowerPoint files (PPTX or PPTM) can be merged.".into();
+                    self.status = if presentations { "Already in the list." } else { "Only PowerPoint files (PPTX or PPTM) can be merged." }.into();
                 }
             }
             Function::Images => self.add_images(urls),
@@ -605,6 +606,10 @@ impl App {
                 match result {
                     Ok(report) if self.function == Function::Media => {
                         self.status = format!("{}, copied into “{}”.", report.checks.first().cloned().unwrap_or_default(), file_name(Path::new(&report.output)));
+                        self.tool_report = Some(report);
+                    }
+                    Ok(report) if self.function == Function::Images => {
+                        self.status = format!("{}. Checks passed; review the appearance in PowerPoint.", report.checks.first().cloned().unwrap_or_default());
                         self.tool_report = Some(report);
                     }
                     Ok(report) => {

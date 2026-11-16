@@ -98,12 +98,12 @@ struct PPTShowToolsApp: App {
             let command = args.count > 1 ? args[1] : ""
             switch command {
             case "--office-prepare" where args.count >= 4:
-                try printJSON(try OfficePipeline.prepare(inputs: paths(3), destination: URL(fileURLWithPath: args[2]))); return 0
+                try printJSON(try OfficePipeline.prepare(inputs: paths(3), destination: URL(fileURLWithPath: args[2]), fixedSize: fixed)); return 0
             case "--office-verify" where args.count >= 4:
                 let checks = try OfficePipeline.verify(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
             case "--verify" where args.count >= 5:
-                let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]))
+                let checks = try PackageVerifier.inspect(inputs: paths(3), output: URL(fileURLWithPath: args[2]), fixedSize: fixed)
                 try printJSON(checks); return checks.allSatisfy { $0.issues.isEmpty } ? 0 : 2
             case "--check-update" where args.count == 2:
                 let release = try Updater.latest()

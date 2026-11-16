@@ -39,13 +39,19 @@ pub fn standardize(path: &str) -> String {
     if path.starts_with('/') { format!("/{joined}") } else { joined }
 }
 
+/// Key for comparing OPC part names, which are case-insensitive (ASCII) and may be percent-encoded.
+pub fn part_name_key(name: &str) -> String {
+    let trimmed = name.trim_start_matches('/');
+    percent_decode(trimmed).unwrap_or_else(|| trimmed.to_string()).to_ascii_lowercase()
+}
+
 pub fn dirname(path: &str) -> &str {
     path.rsplit_once('/').map(|(d, _)| d).unwrap_or("")
 }
 
 pub fn resolve_part(owner: &str, target: &str) -> String {
     let raw = target.split('#').next().unwrap_or("");
-    let clean = percent_decode(raw).unwrap_or_else(|| target.to_string());
+    let clean = percent_decode(raw).unwrap_or_else(|| raw.to_string());
     let path = if clean.starts_with('/') { clean } else { format!("/{}/{}", dirname(owner), clean) };
     standardize(&path).trim_start_matches('/').to_string()
 }
@@ -156,12 +162,65 @@ pub fn owner_of_rels(file: &str) -> String {
     if parent.is_empty() { base.to_string() } else { format!("{parent}/{base}") }
 }
 
+/// Parts holding macros, whatever their names: found by name, content type and
+/// relationship type, with their own relationship parts. Same as macroParts on macOS.
+pub fn macro_parts(root: &Path) -> Vec<String> {
+    let files = package_files(root);
+    let mut by_key: HashMap<String, String> = HashMap::new();
+    for f in &files {
+        by_key.entry(part_name_key(f)).or_insert_with(|| f.clone());
+    }
+    const MACRO_TYPES: [&str; 2] = ["application/vnd.ms-office.vbaproject", "application/vnd.ms-word.vbadata+xml"];
+    let mut found = std::collections::BTreeSet::new();
+    let add = |found: &mut std::collections::BTreeSet<String>, part: &str| {
+        if let Some(actual) = by_key.get(&part_name_key(part)) {
+            found.insert(actual.clone());
+        }
+    };
+    add(&mut found, "ppt/vbaProject.bin");
+    add(&mut found, "ppt/vbaData.xml");
+    if let Ok(ct) = read_xml(root, "[Content_Types].xml") {
+        for e in ct.root.named("Override").filter(|e| MACRO_TYPES.contains(&e.attr("ContentType").to_lowercase().as_str())) {
+            add(&mut found, e.attr("PartName"));
+        }
+        let extensions: HashSet<String> = ct.root.named("Default").filter(|e| MACRO_TYPES.contains(&e.attr("ContentType").to_lowercase().as_str())).map(|e| e.attr("Extension").to_lowercase()).collect();
+        for f in &files {
+            let name = f.rsplit('/').next().unwrap_or("");
+            if name.rsplit_once('.').is_some_and(|(_, e)| extensions.contains(&e.to_lowercase())) {
+                found.insert(f.clone());
+            }
+        }
+    }
+    for f in files.iter().filter(|f| f.ends_with(".rels")) {
+        let Ok(rels) = read_xml(root, f) else { continue };
+        for e in rels.root.named("Relationship").filter(|e| e.attr("TargetMode") != "External") {
+            let kind = e.attr("Type").to_lowercase();
+            if kind.ends_with("/vbaproject") || kind.ends_with("/vbadata") || kind.ends_with("/wordvbadata") {
+                add(&mut found, &resolve_part(&owner_of_rels(f), e.attr("Target")));
+            }
+        }
+    }
+    for part in found.clone() {
+        let (dir, name) = part.rsplit_once('/').unwrap_or(("", &part));
+        let rels = if dir.is_empty() { format!("_rels/{name}.rels") } else { format!("{dir}/_rels/{name}.rels") };
+        add(&mut found, &rels);
+    }
+    found.into_iter().collect()
+}
+
+/// Parts of an imported presentation that nothing in the result uses: its document
+/// properties (authors, company, thumbnail) and custom XML data. Its VBA project
+/// (`macro_parts`) is never merged either.
+pub const UNUSED_IMPORTED_PARTS: [&str; 2] = ["docProps", "customXml"];
+
 pub struct PackageSnapshot {
     pub slides: Vec<String>,
     parts: BTreeMap<String, PartFingerprint>,
     notes: BTreeMap<String, String>,
     binaries: BTreeMap<String, String>,
     has_vba: bool,
+    /// Parts a merge leaves out when this package is imported (not the first file).
+    dropped_on_import: Vec<String>,
     embedded_fonts: Vec<String>,
     links: BTreeMap<String, Vec<ResourceLink>>,
     slide_size: Option<(i64, i64)>,
@@ -174,7 +233,8 @@ impl PackageSnapshot {
         let mut binaries = BTreeMap::new();
         let mut links = BTreeMap::new();
         for file in package_files(root) {
-            if file.ends_with(".rels") && ["ppt/slides/", "ppt/slideLayouts/", "ppt/slideMasters/", "ppt/notesSlides/"].iter().any(|p| file.starts_with(p)) {
+            // Every relationship part: a target anywhere (themes, charts…) must keep pointing inside its own package.
+            if file.ends_with(".rels") {
                 let d = read_xml(root, &file)?;
                 links.insert(file.clone(), d.root.named("Relationship").map(|e| ResourceLink { id: e.attr("Id").into(), kind: e.attr("Type").into(), target: e.attr("Target").into(), external: e.attr("TargetMode") == "External" }).collect());
             }
@@ -186,12 +246,14 @@ impl PackageSnapshot {
                 binaries.insert(file.clone(), checksum_file(&crate::xml::part_path(root, &file))?);
             }
         }
+        let macros = macro_parts(root);
         Ok(PackageSnapshot {
             slides: ordered_parts(root)?,
             parts,
             notes,
             binaries,
-            has_vba: crate::xml::part_path(root, "ppt/vbaProject.bin").exists(),
+            has_vba: !macros.is_empty(),
+            dropped_on_import: ["", "ppt/presentation.xml"].iter().chain(UNUSED_IMPORTED_PARTS.iter()).map(|s| s.to_string()).chain(macros).collect(),
             embedded_fonts: embedded_typefaces(root),
             links,
             slide_size: read_xml(root, "ppt/presentation.xml").ok().and_then(|d| slide_size(&d.root)),
@@ -236,10 +298,10 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
     }
     if let Ok(ct) = read_xml(merged, "[Content_Types].xml") {
         let defaults: HashSet<String> = ct.root.named("Default").map(|e| e.attr("Extension").to_lowercase()).collect();
-        let overrides: HashSet<String> = ct.root.named("Override").map(|e| e.attr("PartName").trim_start_matches('/').to_string()).collect();
+        let overrides: HashSet<String> = ct.root.named("Override").map(|e| part_name_key(e.attr("PartName"))).collect();
         for file in all_files.iter().filter(|f| *f != "[Content_Types].xml") {
             let ext = if file.ends_with(".rels") { "rels".to_string() } else { file.rsplit_once('.').map(|(_, e)| e.to_lowercase()).filter(|_| file.rsplit('/').next().unwrap_or("").contains('.')).unwrap_or_default() };
-            if !overrides.contains(file) && !defaults.contains(&ext) {
+            if !overrides.contains(&part_name_key(file)) && !defaults.contains(&ext) {
                 global.push(format!("Missing content type in the merged package: {file}"));
             }
         }
@@ -316,6 +378,10 @@ pub fn verify(sources: &[PackageSnapshot], inputs: &[PathBuf], merged: &Path) ->
             }
         }
         for (part, links) in &source.links {
+            // The package root, presentation, properties and macros of an imported file are left out on purpose.
+            if i > 0 && source.dropped_on_import.iter().any(|d| owner_of_rels(part) == *d || part.starts_with(&format!("{d}/"))) {
+                continue;
+            }
             let destination = format!("{prefix}{part}");
             if !names.contains(&destination) {
                 issues.push(format!("Missing resource relationships: {part}"));
@@ -390,7 +456,9 @@ fn embedded_typefaces(root: &Path) -> Vec<String> {
 
 /// `fixed` and `fit` must match the options the output was merged with, so
 /// animations are checked against the scaling actually applied.
-pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>> {
+/// `fixed` must be the size the output was made with: the output's slide size
+/// is checked against the one a merge with that setting chooses.
+pub fn inspect(inputs: &[PathBuf], output: &Path, fixed: Option<(i64, i64)>) -> Result<Vec<FileValidation>> {
     let temp = TempDir::new("PPTShowTools-Check")?;
     let mut snapshots = vec![];
     for (i, input) in inputs.iter().enumerate() {
@@ -402,5 +470,17 @@ pub fn inspect(inputs: &[PathBuf], output: &Path) -> Result<Vec<FileValidation>>
     let out = temp.path().join("out");
     std::fs::create_dir_all(&out).or_else(|e| fail(e.to_string()))?;
     extract(output, &out)?;
-    verify(&snapshots, inputs, &out)
+    let mut results = verify(&snapshots, inputs, &out)?;
+    let sizes: Vec<(i64, i64)> = snapshots.iter().filter_map(|s| s.slide_size).collect();
+    let actual = read_xml(&out, "ppt/presentation.xml").ok().and_then(|d| slide_size(&d.root));
+    if sizes.len() == snapshots.len() && !results.is_empty() {
+        if let Ok(expected) = crate::merge::plan_slide_size(&sizes, fixed) {
+            if actual != Some(expected) {
+                let shown = actual.map(crate::merge::describe_size).unwrap_or_else(|| "missing".into());
+                results[0].issues.push(format!("The output's slide size ({shown}) is not the expected {}.", crate::merge::describe_size(expected)));
+                results[0].status = "import_failed_validation".into();
+            }
+        }
+    }
+    Ok(results)
 }

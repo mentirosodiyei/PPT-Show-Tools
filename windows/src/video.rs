@@ -17,6 +17,15 @@ pub fn is_video(shape: &Element) -> bool {
     shape.local() == "pic" && shape.child("nvPicPr").and_then(|n| n.child("nvPr")).is_some_and(|p| p.child("videoFile").is_some())
 }
 
+/// Media files this module writes: pst-blur-<8 hex>.png or .mp4.
+pub fn is_backdrop_file(name: &str) -> bool {
+    name.strip_prefix("pst-blur-").and_then(|r| r.strip_suffix(".png").or_else(|| r.strip_suffix(".mp4"))).is_some_and(|h| h.len() == 8 && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)))
+}
+
+pub fn is_backdrop(shape: &Element) -> bool {
+    shape.local() == "pic" && shape.child("nvPicPr").and_then(|v| v.child("cNvPr")).is_some_and(|p| p.attr("name") == BACKDROP_NAME)
+}
+
 fn shape_id(shape: &Element) -> String {
     shape.child("nvPicPr").and_then(|n| n.child("cNvPr")).map(|c| c.attr("id").to_string()).unwrap_or_default()
 }
@@ -25,7 +34,7 @@ fn shape_id(shape: &Element) -> String {
 pub fn spanning_videos(tree: &Element, width: f64, height: f64) -> Vec<String> {
     let mut out = vec![];
     for shape in tree.elems() {
-        if !is_video(shape) {
+        if !is_video(shape) || is_backdrop(shape) {
             continue;
         }
         let ext = shape.child("spPr").and_then(|s| s.child("xfrm")).and_then(|t| t.child("ext"));
@@ -114,22 +123,29 @@ fn blurred_video(input: &Path, output: &Path, size: (u32, u32)) -> bool {
 fn encode(ffmpeg: &Path, input: &Path, output: &Path, size: (u32, u32), encoder: &[&str]) -> bool {
     let (w, h) = size;
     let filter = format!("scale={w}:{h}:force_original_aspect_ratio=increase,crop={w}:{h},gblur=sigma={:.1},format=yuv420p", blur_sigma(h));
+    let Ok(input) = std::path::absolute(input) else { return false };
     let mut command = std::process::Command::new(ffmpeg);
-    command.args(["-nostdin", "-y", "-loglevel", "error", "-i"]).arg(input).args(["-an", "-vf", &filter]).args(encoder).args(["-movflags", "+faststart"]).arg(output);
-    command.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    command.args(["-nostdin", "-y", "-loglevel", "error", "-protocol_whitelist", "file", "-i"]).arg(&input).args(["-an", "-vf", &filter]).args(encoder).args(["-movflags", "+faststart"]).arg(output);
+    run_limited(command, std::time::Duration::from_secs(1800)) && output.is_file()
+}
+
+/// Runs FFmpeg without a console window, its output discarded; stopped after `limit`.
+pub fn run_limited(mut command: std::process::Command, limit: std::time::Duration) -> bool {
+    command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
     #[cfg(windows)]
     {
         use std::os::windows::process::CommandExt;
         command.creation_flags(0x0800_0000);
     }
     let Ok(mut child) = command.spawn() else { return false };
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(1800);
+    let deadline = std::time::Instant::now() + limit;
     loop {
         match child.try_wait() {
-            Ok(Some(status)) => return status.success() && output.is_file(),
-            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(200)),
+            Ok(Some(status)) => return status.success(),
+            Ok(None) if std::time::Instant::now() < deadline => std::thread::sleep(std::time::Duration::from_millis(100)),
             _ => {
                 let _ = child.kill();
+                let _ = child.wait();
                 return false;
             }
         }
@@ -191,6 +207,10 @@ fn add_backdrop(package: &Path, doc: &mut Document, id: &str, slide: (f64, f64),
     pad.extensions.insert("png".into());
     let video_name = format!("ppt/media/pst-blur-{}.mp4", &stem[..8]);
     let moving = blurred_video(&crate::xml::part_path(package, &video), &crate::xml::part_path(package, &video_name), size);
+    if !moving {
+        // A failed encoder can leave a partial file that nothing would reference.
+        let _ = std::fs::remove_file(crate::xml::part_path(package, &video_name));
+    }
     let poster_rel = part.add_relationship(pad, IMAGE_REL, &format!("/{poster_name}"))?;
     let mut copy = original.clone();
     let rels = if moving {
@@ -294,21 +314,34 @@ fn follow(e: &mut Element, original: &str, copy: &str, next: &mut u64) {
     }
 }
 
+/// Ids of the videos that already have a blurred copy (the copy sits just behind its video).
+pub fn backdrop_owners(tree: &Element) -> Vec<String> {
+    let shapes: Vec<&Element> = tree.elems().collect();
+    shapes.iter().enumerate().filter(|(_, s)| is_backdrop(s)).filter_map(|(i, _)| shapes[i + 1..].iter().find(|s| is_video(s) && !is_backdrop(s)).map(|s| shape_id(s))).collect()
+}
+
 /// The verifier compares a part without the copies this module adds.
 pub fn without_backdrops(element: &Element) -> Element {
+    let mut copy = element.clone();
+    remove_backdrops(&mut copy);
+    copy
+}
+
+/// Removes the copies an earlier resize added, and the timing that plays them,
+/// so resizing again makes one new background instead of stacking another.
+pub fn remove_backdrops(element: &mut Element) {
     let mut ids = vec![];
     element.visit(&mut |e| {
         if e.local() == "cNvPr" && e.attr("name") == BACKDROP_NAME {
             ids.push(e.attr("id").to_string());
         }
     });
-    let mut copy = element.clone();
     if ids.is_empty() {
-        return copy;
+        return;
     }
     fn strip(e: &mut Element, ids: &[String]) {
         e.children.retain(|n| match n {
-            Node::Elem(c) if c.local() == "pic" => !c.child("nvPicPr").and_then(|v| v.child("cNvPr")).is_some_and(|p| p.attr("name") == BACKDROP_NAME),
+            Node::Elem(c) if c.local() == "pic" => !is_backdrop(c),
             Node::Elem(c) if ["cmd", "video", "audio"].contains(&c.local()) => !ids.iter().any(|id| targets(c, id)),
             _ => true,
         });
@@ -316,6 +349,5 @@ pub fn without_backdrops(element: &Element) -> Element {
             strip(c, ids);
         }
     }
-    strip(&mut copy, &ids);
-    copy
+    strip(element, &ids);
 }

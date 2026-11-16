@@ -144,7 +144,9 @@ struct PresentationTools {
                 }
             }
         }
-        return paragraphs.joined(separator:"\n").trimmingCharacters(in:.whitespacesAndNewlines)
+        // A carriage return (&#13;) would come back as a line feed once written and read again.
+        let text=paragraphs.joined(separator:"\n").replacingOccurrences(of:"\r\n",with:"\n").replacingOccurrences(of:"\r",with:"\n")
+        return text.trimmingCharacters(in:.whitespacesAndNewlines)
     }
     static func fittedSize(_ text:String) -> Double {
         guard !text.isEmpty else{return 0}

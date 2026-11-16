@@ -120,6 +120,34 @@ pub fn extract_media(input: &Path, destination: &Path, kinds: &[MediaKind], spec
         let rels = read_xml(root.path(), &rels_part)?;
         // Poster frames: the still picture of a video or sound is not an image of its own.
         let mut posters = std::collections::HashSet::new();
+        // Blurred backgrounds added by a resize are not the presentation's own media.
+        let (mut backdrop_refs, mut referenced) = (std::collections::HashSet::new(), std::collections::HashSet::new());
+        if let Ok(doc) = read_xml(root.path(), slide) {
+            fn references(e: &crate::xml::Element, into: &mut std::collections::HashSet<String>) {
+                e.visit(&mut |x| {
+                    for a in &x.attrs {
+                        if a.ns == R_NS {
+                            into.insert(a.value.clone());
+                        }
+                    }
+                });
+            }
+            fn walk(e: &crate::xml::Element, backdrops: &mut std::collections::HashSet<String>, referenced: &mut std::collections::HashSet<String>) {
+                if crate::video::is_backdrop(e) {
+                    references(e, backdrops);
+                    return;
+                }
+                for a in &e.attrs {
+                    if a.ns == R_NS {
+                        referenced.insert(a.value.clone());
+                    }
+                }
+                for c in e.elems() {
+                    walk(c, backdrops, referenced);
+                }
+            }
+            walk(&doc.root, &mut backdrop_refs, &mut referenced);
+        }
         if let Ok(doc) = read_xml(root.path(), slide) {
             for pic in doc.root.descendants("pic") {
                 let media = pic.child("nvPicPr").and_then(|n| n.child("nvPr")).is_some_and(|nv| nv.child("videoFile").is_some() || nv.child("audioFile").is_some());
@@ -149,6 +177,10 @@ pub fn extract_media(input: &Path, destination: &Path, kinds: &[MediaKind], spec
                 None
             };
             let Some(kind) = kind.filter(|k| kinds.contains(k)) else { continue };
+            let synthetic = backdrop_refs.contains(rel.attr("Id")) || crate::video::is_backdrop_file(target.rsplit('/').next().unwrap_or(target));
+            if synthetic && !referenced.contains(rel.attr("Id")) {
+                continue;
+            }
             if rel.attr("TargetMode") == "External" {
                 if !linked.iter().any(|l| l == target) {
                     linked.push(target.to_string());

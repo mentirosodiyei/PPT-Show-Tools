@@ -57,11 +57,21 @@ pub fn normalize(package: &Path, presentation: &mut Document, from: (i64, i64), 
             // Frames are read before the uniform pass rescales them.
             let mut frames = vec![];
             let mut videos = vec![];
+            // A background from an earlier resize is made again for the new proportion,
+            // for the same video, even though that video no longer fills the slide.
+            let mut owners = vec![];
+            if layout_part && !same_aspect(from, to) {
+                if let Some(tree) = doc.root.first_descendant_mut("spTree") {
+                    owners = crate::video::backdrop_owners(tree);
+                }
+                crate::video::remove_backdrops(&mut doc.root);
+            }
             if layout_part {
                 if let Some(tree) = doc.root.first_descendant_mut("spTree") {
                     collect_frames(tree, &mut frames);
                     if !same_aspect(from, to) {
-                        videos = crate::video::spanning_videos(tree, page.width, page.height);
+                        videos = owners.clone();
+                        videos.extend(crate::video::spanning_videos(tree, page.width, page.height).into_iter().filter(|v| !owners.contains(v)));
                     }
                 }
             }
@@ -296,10 +306,11 @@ pub fn scale_formula_offsets(fmla: &str, variable: &str, factor: f64, shift: f64
     if !trimmed.contains(variable) {
         return if shift.abs() > 1e-9 { format!("({trimmed})*{}+{}", format_coord(factor), format_coord(shift)) } else { format!("({trimmed})*{}", format_coord(factor)) };
     }
-    let pattern = format!(r"^({})\s*([+-])\s*([0-9]+(?:\.[0-9]+)?)$", regex::escape(variable));
+    // PowerPoint writes the variable with or without a leading "#".
+    let pattern = format!(r"^(#?)({})\s*([+-])\s*([0-9]+(?:\.[0-9]+)?)$", regex::escape(variable));
     if let Some(c) = regex::Regex::new(&pattern).ok().and_then(|r| r.captures(trimmed)) {
-        if let Ok(n) = c[3].parse::<f64>() {
-            return format!("{variable}{}{}", &c[2], format_coord(n * factor));
+        if let Ok(n) = c[4].parse::<f64>() {
+            return format!("{}{variable}{}{}", &c[1], &c[3], format_coord(n * factor));
         }
     }
     fmla.to_string()
@@ -327,6 +338,9 @@ pub fn scale_motion_path(path: &str, rx: f64, ry: f64, sx: f64, sy: f64, origin_
                 }
                 tokens.push(ch.to_string());
             }
+        } else if (ch == '-' || ch == '+') && current.chars().last().is_some_and(|l| l != 'e' && l != 'E') {
+            // "0.5-0.25" is two numbers; a sign after an exponent is not.
+            tokens.push(std::mem::replace(&mut current, ch.to_string()));
         } else {
             current.push(ch);
         }
