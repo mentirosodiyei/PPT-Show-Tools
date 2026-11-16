@@ -1,6 +1,6 @@
 [package]
 name = "pptshowtools"
-version = "0.10.0"
+version = "0.10.1"
 edition = "2021"
 authors = ["David Redondo García"]
 repository = "https://github.com/mentirosodiyei/PPT-Show-Tools"

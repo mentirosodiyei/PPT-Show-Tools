@@ -6,7 +6,7 @@
 # which macOS 28 removes.
 set -eu
 cd "${0:A:h}"
-VERSION=0.10.0
+VERSION=0.10.1
 # Synced folders (iCloud Drive / File Provider) keep re-adding Finder metadata,
 # which makes codesign fail. Build and sign in a private temp folder instead.
 STAGE="$(mktemp -d "${TMPDIR:-/tmp}/pptshowtools-build.XXXXXX")"

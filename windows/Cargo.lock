@@ -2445,7 +2445,7 @@ dependencies = [
 
 [[package]]
 name = "pptshowtools"
-version = "0.10.0"
+version = "0.10.1"
 dependencies = [
  "base64",
  "ed25519-dalek",
