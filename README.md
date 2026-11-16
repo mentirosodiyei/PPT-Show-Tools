@@ -14,7 +14,7 @@ Get the latest version from **[Releases](https://github.com/mentirosodiyei/PPT-S
 | Mac with Intel, macOS 14 to 26 | `PPTShowTools-<version>-Intel.dmg` |
 | Windows 10/11, 64-bit | `PPTShowTools-Setup-<version>.exe` (installer) or `…-Windows-portable.zip` (no installation) |
 
-- **macOS:** open the DMG and drag PPT Show Tools to Applications. The app is not notarised, so the first time, right-click it and choose **Open**.
+- **macOS:** open the DMG and drag PPT Show Tools to Applications. The app is not notarised, so the first time macOS says it cannot be opened: click **Done**, then go to **System Settings → Privacy & Security**, scroll down and click **Open Anyway** next to PPT Show Tools. This is needed only once.
 - **Windows:** the installer is not signed. If SmartScreen warns, click **More info → Run anyway**. It installs for your user only and needs no administrator rights.
 
 Not sure which Mac you have? Apple menu → About This Mac: "Chip: Apple M…" is Apple Silicon, "Processor: Intel" is Intel.
